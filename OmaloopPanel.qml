@@ -101,22 +101,11 @@ Item {
   function close() { root.opened = false }
 
   // Keyboard focus follows `opened`, not `visible` (the window stays mapped
-  // during the slide-up). Prime with Exclusive on every open, then settle on
-  // OnDemand: Hyprland only hands OnDemand focus to a surface as it maps, not
-  // to an already-mapped one flipping from None. Same dance as the shell's
-  // own KeyboardPanel.
-  property bool focusPrimed: false
-  Timer { id: focusPrime; interval: 75; onTriggered: if (root.opened) root.focusPrimed = true }
-  onOpenedChanged: {
-    if (opened) {
-      focusPrimed = false
-      focusPrime.restart()
-      Qt.callLater(function() { if (root.opened) keys.forceActiveFocus() })
-    } else {
-      focusPrime.stop()
-      focusPrimed = false
-    }
-  }
+  // during the slide-up). While the panel is down it holds the keyboard
+  // exclusively, like the shell's menus: an instrument you are playing should
+  // never leak keystrokes into the window underneath. Esc releases it and
+  // the loop keeps playing.
+  onOpenedChanged: if (opened) Qt.callLater(function() { if (root.opened) keys.forceActiveFocus() })
 
   // ---- engine process ----
   function ensureEngine() {
@@ -398,9 +387,7 @@ Item {
     color: "transparent"
     WlrLayershell.namespace: "omaloop"
     WlrLayershell.layer: WlrLayer.Top
-    WlrLayershell.keyboardFocus: root.opened
-      ? (root.focusPrimed ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.Exclusive)
-      : WlrKeyboardFocus.None
+    WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore
 
     Rectangle {
