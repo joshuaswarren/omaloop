@@ -19,7 +19,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   rm -f "$apps/omaloop.desktop"
   update-desktop-database "$apps" 2>/dev/null || true
   echo "==> removed omaloop:// handler"
-  if [[ -f "$bindings" ]] && grep -qF "$marker" "$bindings"; then
+  if [[ -f "$bindings" ]] && grep -qF -e "$marker" "$bindings"; then
     sed -i "/^$marker\$/,/^o.bind(\"SUPER + ALT + L\", \"omaloop\"/d" "$bindings"
     echo "==> removed SUPER+ALT+L from $bindings"
   fi
