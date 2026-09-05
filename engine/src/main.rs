@@ -12,6 +12,7 @@
 //!           {"cmd":"tone","cutoff":0.4,"detune":0.6,"drive":0.3,"sub":0.5}
 //!           {"cmd":"clear","track":"lead"}   {"cmd":"random","track":"bass"}
 //!           {"cmd":"preset","name":"acid"}   {"cmd":"load", ...pattern fields}
+//!           {"cmd":"generate","seed":123,"energy":0.7,"warmth":0.3,"brightness":0.1,"spice":0.5}
 //!           {"cmd":"load","code":"<loop code>"}   {"cmd":"code"}
 //!           {"cmd":"save","name":"my loop"}  {"cmd":"open","name":"my loop"}
 //!           {"cmd":"delete","name":"my loop"} {"cmd":"list"}
@@ -43,6 +44,8 @@ const NOTE_TRACKS: [&str; 2] = ["bass", "lead"];
 const PRESETS: [&str; 4] = ["y2k", "acid", "minimal", "breaks"];
 /// A minor pentatonic plus the 2nd and 6th: enough colour, never wrong.
 const SCALE: [u8; 7] = [0, 2, 3, 5, 7, 8, 10];
+const MAJOR: [u8; 7] = [0, 2, 4, 5, 7, 9, 11];
+const DORIAN: [u8; 7] = [0, 2, 3, 5, 7, 9, 10];
 const DELAY_MAX: usize = 96_000;
 
 #[derive(Clone)]
@@ -229,6 +232,134 @@ impl Pattern {
         p.sub = f(b[46]);
         p.transpose = b[47] % 12;
         Ok(p)
+    }
+}
+
+/// Small deterministic RNG so a theme always composes the same loop.
+struct Rng(u64);
+impl Rng {
+    fn new(seed: u64) -> Self { Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1) }
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn f(&mut self) -> f32 { (self.next() >> 40) as f32 / (1u64 << 24) as f32 }
+    fn chance(&mut self, p: f32) -> bool { self.f() < p }
+    fn pick<T: Copy>(&mut self, xs: &[T]) -> T { xs[(self.next() % xs.len() as u64) as usize] }
+    fn range(&mut self, lo: f32, hi: f32) -> f32 { lo + (hi - lo) * self.f() }
+}
+
+/// Compose a loop from a palette fingerprint. `energy` (saturation, contrast),
+/// `warmth` (hue: orange high, blue low), `brightness` (background lightness),
+/// and `spice` (second-colour saturation) pick a style; the seed picks the
+/// specific notes inside that style's rules.
+impl Pattern {
+    fn generate(seed: u64, energy: f32, warmth: f32, brightness: f32, spice: f32) -> Self {
+        let mut r = Rng::new(seed);
+        let style = if brightness >= 0.5 { "house" }
+            else if energy > 0.6 && warmth < 0.5 { "techno" }
+            else if energy > 0.6 { "synthwave" }
+            else if warmth >= 0.5 { "boombap" }
+            else { "deep" };
+        let mut p = Pattern::blank(style, 120.0);
+        let (scale, bass_root, lead_root): (&[u8], u8, u8) = match style {
+            "house" => (&MAJOR, 33, 57),
+            "boombap" => (&DORIAN, 33, 57),
+            _ => (&SCALE, 33, 57),
+        };
+        let every = |p: &mut Pattern, t: usize, start: usize, step: usize| {
+            let mut i = start;
+            while i < STEPS { p.drums[t][i] = true; i += step; }
+        };
+        match style {
+            "techno" => {
+                p.bpm = r.range(132.0, 142.0).round();
+                p.swing = r.range(0.0, 0.12);
+                every(&mut p, 0, 0, 4);
+                if r.chance(0.5) { p.drums[1][4] = true; p.drums[1][12] = true; }
+                every(&mut p, 3, 2, 4);
+                for i in 0..STEPS { if i % 2 == 1 && r.chance(0.35 + energy * 0.4) { p.drums[2][i] = true; } }
+                if r.chance(0.5) { p.drums[2][15] = true; }
+                let fifth = scale[4];
+                for i in 0..STEPS {
+                    p.notes[0][i] = if i % 2 == 0 { bass_root } else if r.chance(0.3) { bass_root + fifth } else if r.chance(0.5) { bass_root } else { 0 };
+                }
+                let motif = [r.pick(scale), r.pick(scale), r.pick(scale)];
+                for (k, i) in [0usize, 6, 10, 14].iter().enumerate() {
+                    if r.chance(0.3 + spice * 0.5) { p.notes[1][*i] = lead_root + 12 + motif[k % 3]; }
+                }
+                p.cutoff = 0.35; p.drive = 0.35; p.sub = 0.8;
+            }
+            "synthwave" => {
+                p.bpm = r.range(116.0, 128.0).round();
+                p.swing = 0.0;
+                every(&mut p, 0, 0, 4);
+                p.drums[1][4] = true; p.drums[1][12] = true;
+                every(&mut p, 2, 0, 2);
+                every(&mut p, 3, 2, 8);
+                for i in 0..STEPS { p.notes[0][i] = if i % 4 == 3 { bass_root + 12 } else { bass_root }; }
+                let chord = [scale[0], scale[2], scale[4], scale[6]];
+                let up = r.chance(0.6);
+                for i in 0..STEPS {
+                    let k = if up { i % 4 } else { 3 - i % 4 };
+                    p.notes[1][i] = if r.chance(0.85) { lead_root + 12 + chord[k] } else { 0 };
+                }
+                p.cutoff = 0.6; p.detune = 0.85; p.drive = 0.25; p.sub = 0.5;
+            }
+            "boombap" => {
+                p.bpm = r.range(86.0, 96.0).round();
+                p.swing = r.range(0.28, 0.45);
+                p.drums[0][0] = true;
+                p.drums[0][r.pick(&[6usize, 7, 10])] = true;
+                if r.chance(0.5) { p.drums[0][r.pick(&[9usize, 11, 13])] = true; }
+                p.drums[1][4] = true; p.drums[1][12] = true;
+                for i in 0..STEPS { if i % 2 == 0 && r.chance(0.8) { p.drums[2][i] = true; } }
+                if r.chance(0.6) { p.drums[3][14] = true; }
+                p.notes[0][0] = bass_root;
+                p.notes[0][r.pick(&[6usize, 7])] = bass_root;
+                p.notes[0][r.pick(&[10usize, 11])] = bass_root + r.pick(&[scale[2], scale[4], scale[6]]);
+                for _ in 0..3 {
+                    let i = (r.next() % STEPS as u64) as usize;
+                    p.notes[1][i] = lead_root + 12 + r.pick(scale);
+                }
+                p.cutoff = 0.3; p.detune = 0.3; p.drive = 0.15; p.sub = 0.7;
+            }
+            "deep" => {
+                p.bpm = r.range(118.0, 126.0).round();
+                p.swing = r.range(0.08, 0.2);
+                every(&mut p, 0, 0, 4);
+                every(&mut p, 2, 2, 4);
+                if r.chance(0.4) { p.drums[3][10] = true; }
+                if r.chance(0.5) { p.drums[1][4] = true; p.drums[1][12] = true; }
+                p.notes[0][0] = bass_root - 12;
+                p.notes[0][r.pick(&[6usize, 7, 8])] = bass_root - 12;
+                if r.chance(0.6) { p.notes[0][r.pick(&[11usize, 13, 14])] = bass_root - 12 + r.pick(&[scale[2], scale[4]]); }
+                let a = lead_root + 12 + r.pick(scale);
+                p.notes[1][r.pick(&[7usize, 8])] = a;
+                if r.chance(0.5 + spice * 0.5) { p.notes[1][r.pick(&[13usize, 14, 15])] = a + r.pick(&[0u8, 3, 5]); }
+                p.cutoff = 0.2; p.detune = 0.4; p.drive = 0.1; p.sub = 1.0;
+            }
+            _ => {
+                p.bpm = r.range(122.0, 128.0).round();
+                p.swing = r.range(0.05, 0.15);
+                every(&mut p, 0, 0, 4);
+                p.drums[1][4] = true; p.drums[1][12] = true;
+                every(&mut p, 3, 2, 4);
+                for i in 0..STEPS { if i % 2 == 0 && r.chance(0.7) { p.drums[2][i] = true; } }
+                let fifth = scale[4];
+                for i in 0..STEPS {
+                    p.notes[0][i] = match i % 4 { 0 => bass_root, 2 => if r.chance(0.6) { bass_root + fifth } else { 0 }, 3 => if r.chance(0.4) { bass_root + 12 } else { 0 }, _ => 0 };
+                }
+                let stab = [scale[0], scale[2], scale[4]];
+                for i in [2usize, 6, 10, 14] {
+                    if r.chance(0.7) { p.notes[1][i] = lead_root + 12 + r.pick(&stab); }
+                }
+                p.cutoff = 0.7; p.detune = 0.5; p.drive = 0.2; p.sub = 0.4;
+            }
+        }
+        p
     }
 }
 
@@ -598,6 +729,14 @@ impl Engine {
                     }
                 }
                 self.pattern.merge(cmd);
+                true
+            }
+            Some("generate") => {
+                let f = |k: &str, d: f32| cmd[k].as_f64().map(|x| x as f32).unwrap_or(d).clamp(0.0, 1.0);
+                let seed = cmd["seed"].as_u64().unwrap_or(1);
+                let volume = self.pattern.volume;
+                self.pattern = Pattern::generate(seed, f("energy", 0.5), f("warmth", 0.5), f("brightness", 0.1), f("spice", 0.5));
+                self.pattern.volume = volume;
                 true
             }
             Some("code") => {

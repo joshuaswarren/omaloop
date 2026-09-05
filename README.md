@@ -4,7 +4,7 @@ A drop-down groovebox for [Omarchy](https://omarchy.org). Press SUPER+ALT+L. A 1
 
 No samples, no DAW, no config. A small Rust engine generates four drums and two synths and sends them straight to PipeWire.
 
-**Your theme has a sound.** The active theme's palette sets the key, the filter, oscillator spread, drive, and sub weight. Switch themes mid-loop and the loop changes key and tone with the colors.
+**Your theme is a loop.** Switch theme and omaloop composes a new one from the palette: the colors pick a style (techno, synthwave, boombap, deep, house), a tempo, a swing, a key, the drums, a bass line, a lead motif, and the tone. The same theme always writes the same loop, so "what does Tokyo Night sound like" has one answer. Shift+G asks for a variation. Your outgoing loop is saved to the library first.
 
 ![omaloop under Robzee84](docs/robzee84.png)
 ![the same loop under Tokyo Night](docs/tokyoled.png)
@@ -43,6 +43,7 @@ Requires Omarchy 4 (Quattro) and Rust 1.75+.
 | `Shift+P` | next preset (y2k, acid, minimal, breaks) |
 | `Shift+R` | randomize the cursor's row (drums by density, notes in scale) |
 | `Shift+C` or `Delete` | clear the cursor's row |
+| `Shift+G` | new loop from the current theme (each press is a new variation) |
 | `Shift+E` | export 4 bars to `~/Music/omaloop/<preset>-<time>.wav` |
 | `Ctrl+C` | copy a share link for this loop |
 | `Ctrl+V` | load a loop from a link or code on the clipboard |
@@ -72,9 +73,21 @@ Omarchy 4 rebuilt the desktop as one Quickshell process. The community started s
 
 In 2000 I produced techno as DJ Zip in FruityLoops with an Akai AX-60 and a Yamaha DD-50. "A Y2K Time Warp" won amp3.com's first Pick Hit Gold of the year on 2000-01-02. The default `y2k` preset is that loop's shape: four-on-the-floor at 138, a clap on 2 and 4, offbeat hats, a walking A-minor bass, and a detuned three-saw lead. The lead is a 3xOSC homage on purpose.
 
-## How the theme becomes a sound
+## How the theme becomes a loop
 
-The panel reads the shell's live palette (`Color.accent`, `Color.background`). Whenever it changes, the panel sends one `tone` message to the engine:
+The panel reads the shell's live palette (accent, background, foreground, urgent, muted) and reduces it to four numbers and a seed:
+
+| Feature | From | Decides |
+|---|---|---|
+| energy | accent saturation and accent-to-background contrast | techno or synthwave (high) against boombap or deep (low) |
+| warmth | accent hue, orange high and blue low | warm styles (synthwave, boombap) against cool ones (techno, deep) |
+| brightness | background lightness | light themes get house, in a major key |
+| spice | urgent color saturation | how busy the lead is |
+| seed | a hash of all five colors | the exact notes inside the style's rules |
+
+The engine composes inside each style's vocabulary: four-on-the-floor and offbeat open hats for techno, a swung two-kick pattern with dorian color for boombap, an arpeggiated chord for synthwave, long sub notes and one lead phrase for deep, root-fifth bass and stabs for house. Tempo and swing come from the style with a little seeded variation.
+
+On top of the loop, the palette also sets the tone. Whenever the theme changes the panel sends one `tone` message:
 
 | Palette | Synth |
 |---|---|
@@ -113,6 +126,7 @@ cd engine && cargo build --release
 {"cmd":"tone","cutoff":0.2,"detune":0.8,"drive":0.5,"sub":0.9}
 {"cmd":"swing","value":0.2}
 {"cmd":"random","track":"bass"}
+{"cmd":"generate","seed":42,"energy":0.7,"warmth":0.3,"brightness":0.1,"spice":0.5}
 {"cmd":"code"}
 {"cmd":"load","code":"AUEEEJBVVQCAIQAAIQAAIQAAACEAACQAAAAAAAAAAAAARQBIAAAAAAB9QObMM4AH"}
 {"cmd":"save","name":"friday"}

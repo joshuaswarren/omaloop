@@ -29,6 +29,7 @@ Item {
   readonly property color foreground: Color.foreground
   readonly property color accent: Color.accent
   readonly property color urgent: Color.urgent
+  readonly property color muted: Color.muted
   function tint(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
 
   // ---- state ----
@@ -148,6 +149,7 @@ Item {
       root.applyTheme()
       root.send({ cmd: "dump" })
       if (root.pendingPayload) { var p = root.pendingPayload; root.pendingPayload = null; root.applyPayload(p) }
+      if (root.pendingGenerate) { root.pendingGenerate = false; root.generateFromTheme() }
     }
     onExited: function(code) {
       root.playing = false
@@ -212,8 +214,45 @@ Item {
     })
     send({ cmd: "dump" })
   }
-  onAccentChanged: applyTheme()
-  onBackgroundChanged: applyTheme()
+
+  // ---- theme is the loop ----
+  // A theme is not just a tone: it composes. The palette is reduced to four
+  // musical features and a seed, and the engine writes a loop in the style
+  // they imply. Same theme, same loop, every time, so a theme's sound is a
+  // fact you can share. Switching theme autosaves the outgoing loop first.
+  readonly property string paletteKey: String(accent) + String(background) + String(foreground) + String(urgent) + String(muted)
+  property string lastPaletteKey: ""
+  property bool pendingGenerate: false
+  property int variant: 0
+  function paletteFeatures() {
+    var a = root.accent, b = root.background, u = root.urgent
+    var hue = a.hslHue < 0 ? 0.5 : a.hslHue
+    var h = 0
+    for (var i = 0; i < root.paletteKey.length; i++) h = (Math.imul(h, 16777619) ^ root.paletteKey.charCodeAt(i)) >>> 0
+    return {
+      seed: (h + root.variant * 7919) >>> 0,
+      energy: 0.6 * a.hslSaturation + 0.4 * Math.abs(a.hslLightness - b.hslLightness),
+      warmth: (Math.cos((hue * 360 - 30) * Math.PI / 180) + 1) / 2,
+      brightness: b.hslLightness,
+      spice: u.hslSaturation
+    }
+  }
+  function generateFromTheme() {
+    if (!engine.running) { root.pendingGenerate = true; return }
+    var f = paletteFeatures()
+    send({ cmd: "save", name: "before theme switch" })
+    send({ cmd: "generate", seed: f.seed, energy: f.energy, warmth: f.warmth, brightness: f.brightness, spice: f.spice })
+    applyTheme()
+    root.status("New loop for " + (root.themeName || "this theme") + (root.variant > 0 ? " (variation " + root.variant + ")" : ""))
+  }
+  function nextVariation() { root.variant += 1; generateFromTheme() }
+  Timer { id: themeSettle; interval: 350; onTriggered: { root.variant = 0; root.generateFromTheme() } }
+  onPaletteKeyChanged: {
+    var first = root.lastPaletteKey === ""
+    root.lastPaletteKey = root.paletteKey
+    if (first) applyTheme()
+    else themeSettle.restart()
+  }
 
   FileView {
     path: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme.name"
@@ -362,6 +401,7 @@ Item {
       if (k === Qt.Key_P && shift) { nextPreset(); return }
       if (k === Qt.Key_R && shift) { randomRow(); return }
       if (k === Qt.Key_E && shift) { exportLoop(); return }
+      if (k === Qt.Key_G && shift) { nextVariation(); return }
       root.cursorCol = si
       toggleCell(root.cursorRow, si)
       return
@@ -770,7 +810,7 @@ Item {
                 : root.engineState === "building" ? "Building engine… " + root.lastErr
                 : root.engineState === "error" ? (root.statusText || "Engine error: " + root.lastErr)
                 : root.statusText !== "" ? root.statusText
-                : "Space play · arrows · Enter toggle · Q-P A-H steps · [ ] note · , . bpm · ; ' swing · S-P preset · S-R random · S-E export · C-C copy link · C-V paste · C-S save · C-O library · Esc"
+                : "Space play · arrows · Enter toggle · Q-P A-H steps · [ ] note · , . bpm · ; ' swing · S-P preset · S-R random · S-E export · S-G new loop from theme · C-C link · C-V paste · C-S save · C-O library · Esc"
           }
 
           Text {
