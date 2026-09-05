@@ -105,7 +105,7 @@ Written for anyone reviewing this plugin before enabling it.
 - The panel (`OmaloopPanel.qml`) spawns one child process, `engine/target/release/omaloop-engine`. It is built from the Rust source in this repo with `cargo build --locked`. Dependencies are pinned in `engine/Cargo.lock`: cpal (audio), hound (WAV), serde_json, parking_lot. The engine reads stdin. It writes stdout, the state file, library files, and the WAV exports you ask for.
 - The panel also runs `test`, `cargo build --release` (Build button only), `wl-copy` (Ctrl+C), and `wl-paste -n` (Ctrl+V). It reads `~/.local/state/omarchy/current/theme.name` to show the theme name.
 - `bin/omaloop-open` is the `omaloop://` handler. It extracts a 64-character `[A-Za-z0-9_-]` code from the URL and calls `omarchy-shell shell summon` with it. It ignores anything else.
-- `install.sh` runs only when you run it. It never downloads a script, never uses sudo or pkexec, and only writes the files listed above. `--uninstall` reverses it.
+- `install.sh` runs only when you run it. No sudo or pkexec is required. It never downloads a script and only writes the files listed above. `--uninstall` reverses it.
 - No network access anywhere in the plugin. The share page is static HTML on GitHub Pages and does not phone home.
 - `omarchy plugin validate` passes; there are no symlinks and no bundled binaries in the repo.
 
