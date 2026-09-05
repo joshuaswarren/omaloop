@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.joshuaswarren.omaloop",
+  "name": "omaloop",
+  "version": "0.1.0",
+  "author": "Joshua Warren",
+  "description": "A drop-down groovebox for Omarchy. 16-step drum machine and 3-osc synth that sounds like your theme. Super+L to summon, keys to play, PipeWire out.",
+  "kinds": [
+    "panel",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "OmaloopPanel.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "omaloop",
+    "description": "Toggles the omaloop groovebox",
+    "category": "Media",
+    "defaultSection": "right",
+    "allowMultiple": false
+  }
+}
