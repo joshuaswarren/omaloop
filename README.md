@@ -1,10 +1,10 @@
 # omaloop
 
-A drop-down groovebox for [Omarchy](https://omarchy.org). Press SUPER+ALT+L. A 16-step drum machine, a bass line, and a lead synth slide down from the top of the screen in your theme's colors. Make a loop. Press SUPER+ALT+L again and it slides away while the loop keeps playing.
+A drop-down groovebox for [Omarchy](https://omarchy.org). Press SUPER+ALT+L. A 16-step drum machine, a bass line, and a lead synth slide down from the top of the screen in your theme's colors. Make a loop. Press SUPER+ALT+L again and it slides away while the loop keeps playing. Press Ctrl+C and the loop is a link you can tweet.
 
 No samples, no DAW, no config. A small Rust engine generates four drums and two synths and sends them straight to PipeWire.
 
-**Your theme has a sound.** The active theme's palette sets the filter, oscillator spread, drive, and sub weight. Switch themes mid-loop and the sound changes with the colors.
+**Your theme has a sound.** The active theme's palette sets the key, the filter, oscillator spread, drive, and sub weight. Switch themes mid-loop and the loop changes key and tone with the colors.
 
 ![omaloop under Robzee84](docs/robzee84.png)
 ![the same loop under Tokyo Night](docs/tokyoled.png)
@@ -16,7 +16,7 @@ omarchy plugin add https://github.com/joshuaswarren/omaloop --enable
 ~/.config/omarchy/plugins/io.github.joshuaswarren.omaloop/install.sh --bind
 ```
 
-`install.sh` builds the engine with cargo. With `--bind` it also appends a SUPER+ALT+L binding to `~/.config/hypr/bindings.lua`. Without `--bind` it prints the line for you to add yourself. If the engine is missing, the panel shows a Build button that runs the same build.
+`install.sh` builds the engine with cargo and registers the `omaloop://` link handler. With `--bind` it also appends a SUPER+ALT+L binding to `~/.config/hypr/bindings.lua`. Without `--bind` it prints the line for you to add yourself. If the engine is missing, the panel shows a Build button that runs the same build.
 
 Toggle without the keybind:
 
@@ -44,13 +44,27 @@ Requires Omarchy 4 (Quattro) and Rust 1.75+.
 | `Shift+R` | randomize the cursor's row (drums by density, notes in scale) |
 | `Shift+C` or `Delete` | clear the cursor's row |
 | `Shift+E` | export 4 bars to `~/Music/omaloop/<preset>-<time>.wav` |
+| `Ctrl+C` | copy a share link for this loop |
+| `Ctrl+V` | load a loop from a link or code on the clipboard |
+| `Ctrl+S` | save to your library (type a name, Enter) |
+| `Ctrl+O` | open the library (Up/Down, Enter loads, Delete removes) |
 | `Esc` | hide (the loop keeps playing; the red square stops it) |
 
 Mouse works too: click a cell, scroll on a note cell to transpose, click the preset name to cycle, scroll on swing or volume.
 
 ![editing a loop](docs/editing.png)
 
-The pattern is saved on every change to `~/.config/omaloop/pattern.json` and comes back on the next boot.
+The current pattern is saved on every change to `~/.config/omaloop/pattern.json` and comes back on the next boot. Named loops live in `~/.config/omaloop/patterns/<name>.json`.
+
+## Share a loop
+
+Ctrl+C in the panel puts a link like this on your clipboard:
+
+```
+https://joshuaswarren.github.io/omaloop/#AUEEEJBVVQCAIQAAIQAAIQAAACEAACQAAAAAAAAAAAAARQBIAAAAAAB9QObMM4AH
+```
+
+The 64 characters after `#` are the whole loop: 4 drum masks, 32 notes, tempo, swing, tone, and key, in 48 bytes. Anyone who opens the link gets a browser page that plays the loop with the same synthesis as the desktop engine and shows the grid. If they have omaloop, the "open in omaloop" button hands the code to their panel through the `omaloop://` scheme, and their theme decides how it sounds. Ctrl+V in the panel loads a link or bare code from the clipboard.
 
 ## Why this exists
 
@@ -64,12 +78,12 @@ The panel reads the shell's live palette (`Color.accent`, `Color.background`). W
 
 | Palette | Synth |
 |---|---|
+| accent hue | the key (12 hues, 12 minor keys, applied as a playback transpose so your notes stay where you put them) and oscillator detune spread |
 | accent lightness | filter cutoff (brighter accent, brighter lead and bass) |
-| accent hue | oscillator detune spread |
 | accent saturation | drive (tanh soft clip on the mix) |
 | background darkness | sub weight under the kick and bass |
 
-No table of theme names. Custom themes get a sound too. The four small bars in the header show the current values.
+No table of theme names. Custom themes get a sound too. The header shows the key and four small bars for the current tone. Loading a preset, a saved loop, or a shared link keeps this rule: on your machine, your theme owns the sound.
 
 ## Architecture
 
@@ -88,6 +102,7 @@ The engine is usable on its own:
 ```sh
 cd engine && cargo build --release
 ./target/release/omaloop-engine --render demo.wav --bars 4 --preset breaks
+./target/release/omaloop-engine --render shared.wav --bars 4 --code AUEEEJBVVQCAIQAAIQAAIQAAACEAACQAAAAAAAAAAAAARQBIAAAAAAB9QObMM4AH
 ./target/release/omaloop-engine --play --state /tmp/p.json   # then type JSON lines
 ```
 
@@ -98,6 +113,11 @@ cd engine && cargo build --release
 {"cmd":"tone","cutoff":0.2,"detune":0.8,"drive":0.5,"sub":0.9}
 {"cmd":"swing","value":0.2}
 {"cmd":"random","track":"bass"}
+{"cmd":"code"}
+{"cmd":"load","code":"AUEEEJBVVQCAIQAAIQAAIQAAACEAACQAAAAAAAAAAAAARQBIAAAAAAB9QObMM4AH"}
+{"cmd":"save","name":"friday"}
+{"cmd":"open","name":"friday"}
+{"cmd":"list"}
 {"cmd":"export","path":"/tmp/loop.wav","bars":8}
 {"cmd":"dump"}
 ```
@@ -110,8 +130,10 @@ Events come back as `{"event":"step","index":n}` on every step. `dump` answers w
 manifest.json      Omarchy plugin manifest (panel + bar widget)
 OmaloopPanel.qml   the drop-down
 BarWidget.qml      "♪ loop" in the bar; click toggles the panel
-install.sh         build + optional SUPER+ALT+L binding
+install.sh         build, omaloop:// handler, optional SUPER+ALT+L binding
+bin/omaloop-open   the omaloop:// handler
 engine/            the Rust groovebox
+docs/index.html    the share page (GitHub Pages), a JS port of the engine
 ```
 
 ## License
