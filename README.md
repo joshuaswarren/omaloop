@@ -1,6 +1,6 @@
 # omaloop
 
-A drop-down groovebox for [Omarchy](https://omarchy.org). Press SUPER+L. A 16-step drum machine, a bass line, and a lead synth slide down from the top of the screen in your theme's colors. Make a loop. Press SUPER+L again and it slides away while the loop keeps playing.
+A drop-down groovebox for [Omarchy](https://omarchy.org). Press SUPER+ALT+L. A 16-step drum machine, a bass line, and a lead synth slide down from the top of the screen in your theme's colors. Make a loop. Press SUPER+ALT+L again and it slides away while the loop keeps playing.
 
 No samples, no DAW, no config. A small Rust engine generates four drums and two synths and sends them straight to PipeWire.
 
@@ -16,7 +16,7 @@ omarchy plugin add https://github.com/joshuaswarren/omaloop --enable
 ~/.config/omarchy/plugins/io.github.joshuaswarren.omaloop/install.sh --bind
 ```
 
-`install.sh` builds the engine with cargo. With `--bind` it also appends a SUPER+L binding to `~/.config/hypr/bindings.lua`. Without `--bind` it prints the line for you to add yourself. If the engine is missing, the panel shows a Build button that runs the same build.
+`install.sh` builds the engine with cargo. With `--bind` it also appends a SUPER+ALT+L binding to `~/.config/hypr/bindings.lua`. Without `--bind` it prints the line for you to add yourself. If the engine is missing, the panel shows a Build button that runs the same build.
 
 Toggle without the keybind:
 
@@ -110,7 +110,7 @@ Events come back as `{"event":"step","index":n}` on every step. `dump` answers w
 manifest.json      Omarchy plugin manifest (panel + bar widget)
 OmaloopPanel.qml   the drop-down
 BarWidget.qml      "♪ loop" in the bar; click toggles the panel
-install.sh         build + optional SUPER+L binding
+install.sh         build + optional SUPER+ALT+L binding
 engine/            the Rust groovebox
 ```
 

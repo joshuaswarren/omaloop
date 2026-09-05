@@ -12,13 +12,22 @@
 //!           {"cmd":"tone","cutoff":0.4,"detune":0.6,"drive":0.3,"sub":0.5}
 //!           {"cmd":"clear","track":"lead"}   {"cmd":"random","track":"bass"}
 //!           {"cmd":"preset","name":"acid"}   {"cmd":"load", ...pattern fields}
+//!           {"cmd":"load","code":"<loop code>"}   {"cmd":"code"}
+//!           {"cmd":"save","name":"my loop"}  {"cmd":"open","name":"my loop"}
+//!           {"cmd":"delete","name":"my loop"} {"cmd":"list"}
 //!           {"cmd":"export","path":"/tmp/x.wav","bars":4}
 //!           {"cmd":"dump"}
 //! stdout -> {"event":"step","index":n}   {"event":"state",...}
+//!           {"event":"code","code":..}      {"event":"library","names":[..]}
 //!           {"event":"exported","path":..}  {"event":"error","message":..}
 //!
+//! Loop code: 48 bytes, base64url. v1 layout: [0]=1, [1..9)=4 drum masks u16 LE,
+//! [9..41)=32 MIDI notes (bass then lead), [41]=bpm-40, [42]=swing, [43..47)=
+//! cutoff detune drive sub (all x255), [47]=transpose semitones 0-11.
+//!
 //! `--state <file>` loads the pattern at start and saves it after every change.
-//! `--render out.wav --bars N [--preset acid]` renders offline instead of opening a device.
+//! Saved patterns live next to it in `patterns/<name>.json`.
+//! `--render out.wav --bars N [--preset acid | --code <loop code>]` renders offline.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
@@ -47,6 +56,7 @@ struct Pattern {
     detune: f32,
     drive: f32,
     sub: f32,
+    transpose: u8,
     preset: String,
 }
 
@@ -62,6 +72,7 @@ impl Pattern {
             detune: 0.5,
             drive: 0.2,
             sub: 0.5,
+            transpose: 0,
             preset: name.to_string(),
         }
     }
@@ -136,6 +147,7 @@ impl Pattern {
             "preset": self.preset,
             "bpm": self.bpm, "swing": self.swing, "volume": self.volume,
             "cutoff": self.cutoff, "detune": self.detune, "drive": self.drive, "sub": self.sub,
+            "transpose": self.transpose,
             "kick": self.drums[0], "snare": self.drums[1], "hat": self.drums[2], "ohat": self.drums[3],
             "bass": self.notes[0], "lead": self.notes[1],
         })
@@ -165,10 +177,94 @@ impl Pattern {
         self.detune = f("detune", self.detune, 0.0, 1.0);
         self.drive = f("drive", self.drive, 0.0, 1.0);
         self.sub = f("sub", self.sub, 0.0, 1.0);
+        if let Some(t) = v["transpose"].as_u64() {
+            self.transpose = (t % 12) as u8;
+        }
         if let Some(s) = v["preset"].as_str() {
             self.preset = s.to_string();
         }
     }
+
+    fn to_code(&self) -> String {
+        let mut b = Vec::with_capacity(48);
+        b.push(1u8);
+        for d in &self.drums {
+            let mask = d.iter().enumerate().fold(0u16, |m, (i, on)| if *on { m | (1 << i) } else { m });
+            b.extend_from_slice(&mask.to_le_bytes());
+        }
+        for t in &self.notes {
+            b.extend_from_slice(t);
+        }
+        b.push((self.bpm.round() as i32 - 40).clamp(0, 255) as u8);
+        for v in [self.swing, self.cutoff, self.detune, self.drive, self.sub] {
+            b.push((v * 255.0).round() as u8);
+        }
+        b.push(self.transpose % 12);
+        base64url(&b)
+    }
+
+    fn from_code(code: &str) -> Result<Self, String> {
+        let b = base64url_decode(code.trim())?;
+        if b.len() < 48 || b[0] != 1 {
+            return Err("not an omaloop v1 loop code".into());
+        }
+        let mut p = Pattern::blank("shared", 138.0);
+        for (t, d) in p.drums.iter_mut().enumerate() {
+            let mask = u16::from_le_bytes([b[1 + t * 2], b[2 + t * 2]]);
+            for (i, on) in d.iter_mut().enumerate() {
+                *on = mask & (1 << i) != 0;
+            }
+        }
+        for (t, notes) in p.notes.iter_mut().enumerate() {
+            for (i, n) in notes.iter_mut().enumerate() {
+                *n = b[9 + t * STEPS + i].min(127);
+            }
+        }
+        p.bpm = 40.0 + b[41] as f32;
+        let f = |x: u8| x as f32 / 255.0;
+        p.swing = f(b[42]);
+        p.cutoff = f(b[43]);
+        p.detune = f(b[44]);
+        p.drive = f(b[45]);
+        p.sub = f(b[46]);
+        p.transpose = b[47] % 12;
+        Ok(p)
+    }
+}
+
+const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+fn base64url(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 4 / 3 + 3);
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |acc, (i, b)| acc | (*b as u32) << (16 - 8 * i));
+        for i in 0..chunk.len() + 1 {
+            out.push(B64[((n >> (18 - 6 * i)) & 63) as usize] as char);
+        }
+    }
+    out
+}
+
+fn base64url_decode(s: &str) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let mut acc = 0u32;
+    let mut bits = 0;
+    for c in s.bytes().filter(|c| *c != b'=') {
+        let v = B64.iter().position(|x| *x == c).ok_or("bad character in loop code")? as u32;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xff) as u8);
+        }
+    }
+    Ok(out)
+}
+
+fn safe_name(name: &str) -> Option<String> {
+    let n: String = name.trim().chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-' || *c == '_').collect();
+    let n = n.trim().to_string();
+    if n.is_empty() || n.len() > 48 { None } else { Some(n) }
 }
 
 #[derive(Clone, Copy)]
@@ -201,6 +297,7 @@ struct Engine {
     delay_pos: usize,
     noise: u32,
     events: Option<Sender<Value>>,
+    library: Option<std::path::PathBuf>,
 }
 
 impl Engine {
@@ -227,6 +324,7 @@ impl Engine {
             delay_pos: 0,
             noise: 0x1234_5678,
             events,
+            library: None,
         }
     }
 
@@ -277,12 +375,12 @@ impl Engine {
         let b = p.notes[0][self.step];
         if b > 0 {
             self.bass = on;
-            self.bass_freq = Self::midi_hz(b);
+            self.bass_freq = Self::midi_hz(b + p.transpose);
         }
         let l = p.notes[1][self.step];
         if l > 0 {
             self.lead = on;
-            self.lead_freq = Self::midi_hz(l);
+            self.lead_freq = Self::midi_hz(l + p.transpose);
         }
         self.emit(json!({"event": "step", "index": self.step}));
     }
@@ -339,11 +437,11 @@ impl Engine {
             let t = self.bass.age;
             self.bass_phase = (self.bass_phase + self.bass_freq * dt).fract();
             let saw = self.bass_phase * 2.0 - 1.0;
-            let sub = (2.0 * PI * self.bass_phase).sin();
+            let sine = (2.0 * PI * self.bass_phase).sin();
             let env = (-t * 9.0).exp();
             let alpha = (0.03 + (0.15 + cutoff * 0.5) * env).min(0.99);
             self.bass_lp += alpha * (saw - self.bass_lp);
-            dry += (self.bass_lp * 0.6 + sub * 0.5 * sub) * env * 0.7;
+            dry += (self.bass_lp * 0.6 + sine * 0.5 * sub) * env * 0.7;
             self.bass.age += dt;
             self.bass.active = t < 0.4;
         }
@@ -401,6 +499,10 @@ impl Engine {
                 let mut changed = false;
                 for k in ["cutoff", "detune", "drive", "sub"] {
                     changed |= self.set_f(k, cmd[k].as_f64());
+                }
+                if let Some(t) = cmd["transpose"].as_u64() {
+                    self.pattern.transpose = (t % 12) as u8;
+                    changed = true;
                 }
                 changed
             }
@@ -481,8 +583,62 @@ impl Engine {
                 }
             }
             Some("load") => {
+                if let Some(code) = cmd["code"].as_str() {
+                    match Pattern::from_code(code) {
+                        Ok(p) => {
+                            let volume = self.pattern.volume;
+                            self.pattern = p;
+                            self.pattern.volume = volume;
+                            return true;
+                        }
+                        Err(e) => {
+                            self.emit(json!({"event": "error", "message": e}));
+                            return false;
+                        }
+                    }
+                }
                 self.pattern.merge(cmd);
                 true
+            }
+            Some("code") => {
+                self.emit(json!({"event": "code", "code": self.pattern.to_code()}));
+                false
+            }
+            Some("save") => {
+                let (Some(dir), Some(name)) = (self.library.clone(), cmd["name"].as_str().and_then(safe_name)) else {
+                    self.emit(json!({"event": "error", "message": "save needs a name (letters, digits, space, - _)"}));
+                    return false;
+                };
+                self.pattern.preset = name.clone();
+                let _ = std::fs::create_dir_all(&dir);
+                match std::fs::write(dir.join(format!("{name}.json")), self.pattern.to_json(false).to_string()) {
+                    Ok(()) => { self.emit_library(); true }
+                    Err(e) => { self.emit(json!({"event": "error", "message": format!("save failed: {e}")})); false }
+                }
+            }
+            Some("open") => {
+                let (Some(dir), Some(name)) = (self.library.clone(), cmd["name"].as_str().and_then(safe_name)) else { return false };
+                match std::fs::read_to_string(dir.join(format!("{name}.json"))).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
+                    Some(v) => {
+                        let volume = self.pattern.volume;
+                        self.pattern = Pattern::blank(&name, 138.0);
+                        self.pattern.merge(&v);
+                        self.pattern.preset = name;
+                        self.pattern.volume = volume;
+                        true
+                    }
+                    None => { self.emit(json!({"event": "error", "message": format!("no saved loop named {name}")})); false }
+                }
+            }
+            Some("delete") => {
+                let (Some(dir), Some(name)) = (self.library.clone(), cmd["name"].as_str().and_then(safe_name)) else { return false };
+                let _ = std::fs::remove_file(dir.join(format!("{name}.json")));
+                self.emit_library();
+                false
+            }
+            Some("list") => {
+                self.emit_library();
+                false
             }
             Some("dump") => {
                 self.emit(self.pattern.to_json(self.playing));
@@ -506,6 +662,21 @@ impl Engine {
             }
             _ => false,
         }
+    }
+
+    fn emit_library(&self) {
+        let mut names: Vec<String> = self
+            .library
+            .as_ref()
+            .and_then(|d| std::fs::read_dir(d).ok())
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().to_string()).filter(|_| e.path().extension().map(|x| x == "json").unwrap_or(false)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort_by_key(|n| n.to_lowercase());
+        self.emit(json!({"event": "library", "names": names}));
     }
 
     fn set_f(&mut self, key: &str, v: Option<f64>) -> bool {
@@ -567,7 +738,9 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if let Some(path) = arg_after(&args, "--render") {
         let bars = arg_after(&args, "--bars").and_then(|b| b.parse().ok()).unwrap_or(2);
-        let pattern = arg_after(&args, "--preset").and_then(|p| Pattern::preset(&p));
+        let pattern = arg_after(&args, "--code")
+            .and_then(|c| Pattern::from_code(&c).ok())
+            .or_else(|| arg_after(&args, "--preset").and_then(|p| Pattern::preset(&p)));
         match render(&path, bars, pattern) {
             Ok(()) => eprintln!("rendered {bars} bars to {path}"),
             Err(e) => {
@@ -589,6 +762,7 @@ fn main() {
     let engine = Arc::new(Mutex::new(Engine::new(sr, Some(tx))));
     let state_path = arg_after(&args, "--state");
     if let Some(p) = &state_path {
+        engine.lock().library = std::path::Path::new(p).parent().map(|d| d.join("patterns"));
         if let Ok(text) = std::fs::read_to_string(p) {
             if let Ok(v) = serde_json::from_str::<Value>(&text) {
                 engine.lock().pattern.merge(&v);

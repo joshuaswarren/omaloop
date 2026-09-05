@@ -23,6 +23,7 @@ Item {
   readonly property string enginePath: pluginDir + "/engine/target/release/omaloop-engine"
   readonly property string statePath: (Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config")) + "/omaloop/pattern.json"
   readonly property string exportDir: Quickshell.env("HOME") + "/Music/omaloop"
+  readonly property string shareBase: "https://joshuaswarren.github.io/omaloop/#"
 
   readonly property color background: Color.background
   readonly property color foreground: Color.foreground
@@ -41,6 +42,11 @@ Item {
   property real volume: 0.8
   property string preset: "y2k"
   property var tone: ({ cutoff: 0.45, detune: 0.5, drive: 0.2, sub: 0.5 })
+  property int transpose: 0
+  readonly property string keyName: ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"][(9 + transpose) % 12] + "m"
+  property bool libraryOpen: false
+  property var libraryNames: []
+  property int librarySel: -1
   property var grid: ({
     kick: [], snare: [], hat: [], ohat: [], bass: [], lead: []
   })
@@ -77,14 +83,20 @@ Item {
   }
 
   // ---- lifecycle ----
+  property var pendingPayload: null
   function open(payloadJson) {
     root.opened = true
-    ensureEngine()
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
-    if (payload.preset) send({ cmd: "preset", name: String(payload.preset) })
+    if (engine.running) applyPayload(payload)
+    else root.pendingPayload = payload
+    ensureEngine()
+  }
+  function applyPayload(payload) {
+    if (payload.preset) { send({ cmd: "preset", name: String(payload.preset) }); applyTheme() }
+    if (payload.code) loadShared(String(payload.code))
     if (payload.play === true) send({ cmd: "play" })
-    if (payload.preset) send({ cmd: "dump" })
+    if (payload.preset || payload.code || payload.play) send({ cmd: "dump" })
   }
   function close() { root.opened = false }
 
@@ -142,7 +154,12 @@ Item {
     stdinEnabled: true
     stdout: SplitParser { onRead: function(line) { root.onEngineLine(String(line)) } }
     stderr: SplitParser { onRead: function(line) { root.lastErr = String(line).trim().slice(0, 160) } }
-    onStarted: { root.engineState = "running"; root.applyTheme(); root.send({ cmd: "dump" }) }
+    onStarted: {
+      root.engineState = "running"
+      root.applyTheme()
+      root.send({ cmd: "dump" })
+      if (root.pendingPayload) { var p = root.pendingPayload; root.pendingPayload = null; root.applyPayload(p) }
+    }
     onExited: function(code) {
       root.playing = false
       root.playhead = -1
@@ -174,6 +191,13 @@ Item {
       root.bpm = msg.bpm; root.swing = msg.swing; root.volume = msg.volume
       root.preset = msg.preset || root.preset
       root.tone = ({ cutoff: msg.cutoff, detune: msg.detune, drive: msg.drive, sub: msg.sub })
+      root.transpose = Number(msg.transpose) || 0
+      return
+    }
+    if (msg.event === "code") { copyProc.exec(["wl-copy", root.shareBase + msg.code]); root.status("Loop link copied. Paste it anywhere; Ctrl+V here loads one."); return }
+    if (msg.event === "library") {
+      root.libraryNames = Array.isArray(msg.names) ? msg.names : []
+      if (root.librarySel >= root.libraryNames.length) root.librarySel = root.libraryNames.length - 1
       return
     }
     if (msg.event === "exported") { root.status("Exported " + String(msg.path).replace(Quickshell.env("HOME"), "~")); return }
@@ -181,10 +205,11 @@ Item {
   }
 
   // ---- theme is the tone ----
-  // Every Omarchy theme gets its own sound: the accent's lightness sets the
-  // filter, its hue sets oscillator spread, its saturation sets drive, and a
-  // dark background puts more sub under the kick. Switching theme retunes
-  // the loop live, no table of theme names needed.
+  // Every Omarchy theme gets its own sound: the accent's hue picks the key
+  // (12 hues, 12 keys, applied as a playback transpose so authored notes stay
+  // put) and the oscillator spread, its lightness sets the filter, its
+  // saturation sets drive, and a dark background puts more sub under the
+  // kick. Switching theme retunes the loop live, no table of theme names.
   function applyTheme() {
     var a = root.accent, b = root.background
     var hue = a.hslHue < 0 ? 0.5 : a.hslHue
@@ -193,7 +218,8 @@ Item {
       cutoff: 0.15 + 0.7 * a.hslLightness,
       detune: 0.15 + 0.75 * hue,
       drive: 0.7 * a.hslSaturation,
-      sub: 1.0 - b.hslLightness
+      sub: 1.0 - b.hslLightness,
+      transpose: Math.round(hue * 11)
     })
     send({ cmd: "dump" })
   }
@@ -249,7 +275,7 @@ Item {
   function stop() { send({ cmd: "stop" }); send({ cmd: "dump" }) }
   function nextPreset() {
     var i = (root.presets.indexOf(root.preset) + 1) % root.presets.length
-    send({ cmd: "preset", name: root.presets[i] }); send({ cmd: "dump" })
+    send({ cmd: "preset", name: root.presets[i] }); applyTheme()
     root.status("Preset " + root.presets[i])
   }
   function randomRow() { send({ cmd: "random", track: root.rows[root.cursorRow].id }); send({ cmd: "dump" }) }
@@ -261,6 +287,51 @@ Item {
     send({ cmd: "export", path: root.exportDir + "/" + root.preset + "-" + stamp + ".wav", bars: 4 })
     root.status("Rendering 4 bars…")
   }
+  // ---- sharing and library ----
+  Process { id: copyProc; running: false }
+  Process {
+    id: pasteProc
+    running: false
+    command: ["wl-paste", "-n"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.loadShared(String(text || ""))
+    }
+  }
+  function copyLink() { send({ cmd: "code" }) }
+  function pasteLink() { pasteProc.running = true }
+  function loadShared(text) {
+    var m = /([A-Za-z0-9_-]{64})/.exec(text)
+    if (!m) { root.status("No omaloop loop code in the clipboard"); return }
+    send({ cmd: "load", code: m[1] })
+    send({ cmd: "dump" })
+    root.applyTheme()
+    root.status("Loaded shared loop")
+  }
+  function openLibrary(prefill) {
+    root.libraryOpen = true
+    send({ cmd: "list" })
+    nameField.text = prefill ? root.preset : ""
+    Qt.callLater(function() { nameField.forceActiveFocus(); nameField.selectAll() })
+  }
+  function closeLibrary() { root.libraryOpen = false; keys.forceActiveFocus() }
+  function saveAs(name) {
+    send({ cmd: "save", name: name }); send({ cmd: "dump" })
+    root.status("Saved " + name)
+    nameField.text = ""
+  }
+  function openSaved(i) {
+    if (i < 0 || i >= root.libraryNames.length) return
+    send({ cmd: "open", name: root.libraryNames[i] }); applyTheme()
+    root.status("Loaded " + root.libraryNames[i])
+    closeLibrary()
+  }
+  function deleteSaved(i) {
+    if (i < 0 || i >= root.libraryNames.length) return
+    root.status("Deleted " + root.libraryNames[i])
+    send({ cmd: "delete", name: root.libraryNames[i] })
+  }
+
   function moveCursor(dr, dc) {
     root.cursorRow = ((root.cursorRow + dr) % root.rows.length + root.rows.length) % root.rows.length
     root.cursorCol = ((root.cursorCol + dc) % 16 + 16) % 16
@@ -270,8 +341,16 @@ Item {
   Timer { id: statusClear; interval: 4000; onTriggered: root.statusText = "" }
 
   function handleKey(event) {
-    var k = event.key, shift = (event.modifiers & Qt.ShiftModifier) !== 0
+    var k = event.key, shift = (event.modifiers & Qt.ShiftModifier) !== 0, ctrl = (event.modifiers & Qt.ControlModifier) !== 0
     event.accepted = true
+    if (ctrl) {
+      if (k === Qt.Key_C) { copyLink(); return }
+      if (k === Qt.Key_V) { pasteLink(); return }
+      if (k === Qt.Key_S) { openLibrary(true); return }
+      if (k === Qt.Key_O) { openLibrary(false); return }
+      event.accepted = false
+      return
+    }
     if (k === Qt.Key_Escape) { root.close(); return }
     if (k === Qt.Key_Space) { togglePlay(); return }
     if (k === Qt.Key_Left) { moveCursor(0, -1); return }
@@ -303,7 +382,7 @@ Item {
   }
 
   // ---- window ----
-  readonly property int cellW: 34
+  readonly property int cellW: 40
   readonly property int cellH: 26
   readonly property int gap: 4
   readonly property int labelW: 58
@@ -328,7 +407,7 @@ Item {
       id: sheet
       width: parent.width
       height: parent.height
-      y: root.opened ? 0 : -height
+      y: root.opened ? 0 : -root.sheetH
       color: root.background
       border.color: root.tint(root.accent, 0.35)
       border.width: 1
@@ -341,6 +420,123 @@ Item {
         focus: true
         Keys.onPressed: function(event) { root.handleKey(event) }
         MouseArea { anchors.fill: parent; onPressed: function(m) { keys.forceActiveFocus(); m.accepted = false } }
+      }
+
+      // ---- library overlay (over the grid) ----
+      Rectangle {
+        id: library
+        visible: root.libraryOpen
+        z: 5
+        x: 12 + root.labelW
+        y: 12 + 28 + 6
+        width: 16 * (root.cellW + root.gap) - root.gap
+        height: root.rows.length * (root.cellH + root.gap) - root.gap
+        radius: 6
+        color: root.background
+        border.color: root.tint(root.accent, 0.5)
+        border.width: 1
+
+        Column {
+          anchors.fill: parent
+          anchors.margins: 10
+          spacing: 6
+
+          Row {
+            width: parent.width
+            spacing: 8
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "save as"
+              color: root.foreground
+              opacity: 0.6
+              font.pixelSize: 11
+              font.family: Style.fontFamily
+            }
+            Rectangle {
+              width: parent.width - 180
+              height: 24
+              radius: 4
+              color: root.tint(root.foreground, 0.08)
+              border.color: nameField.activeFocus ? root.accent : "transparent"
+              border.width: 1
+              TextInput {
+                id: nameField
+                anchors.fill: parent
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                verticalAlignment: TextInput.AlignVCenter
+                color: root.foreground
+                font.pixelSize: 12
+                font.family: Style.fontFamily
+                selectByMouse: true
+                maximumLength: 48
+                Keys.onPressed: function(event) {
+                  var k = event.key
+                  event.accepted = true
+                  if (k === Qt.Key_Escape) { root.closeLibrary(); return }
+                  if (k === Qt.Key_Return || k === Qt.Key_Enter) {
+                    if (text.trim() !== "") root.saveAs(text.trim())
+                    else root.openSaved(root.librarySel)
+                    return
+                  }
+                  if (k === Qt.Key_Down) { root.librarySel = Math.min(root.libraryNames.length - 1, root.librarySel + 1); return }
+                  if (k === Qt.Key_Up) { root.librarySel = Math.max(0, root.librarySel - 1); return }
+                  if (k === Qt.Key_Delete && text === "") { root.deleteSaved(root.librarySel); return }
+                  event.accepted = false
+                }
+              }
+            }
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Enter saves · Up/Down + Enter loads · Del removes · Esc"
+              color: root.foreground
+              opacity: 0.45
+              font.pixelSize: 10
+              font.family: Style.fontFamily
+            }
+          }
+
+          ListView {
+            id: libraryList
+            width: parent.width
+            height: parent.height - 30
+            clip: true
+            model: root.libraryNames
+            currentIndex: root.librarySel
+            delegate: Rectangle {
+              required property string modelData
+              required property int index
+              width: libraryList.width
+              height: 22
+              radius: 4
+              color: root.librarySel === index ? root.tint(root.accent, 0.25) : "transparent"
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: 8
+                text: modelData
+                color: root.librarySel === index ? root.accent : root.foreground
+                font.pixelSize: 12
+                font.family: Style.fontFamily
+              }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: { root.librarySel = index; nameField.forceActiveFocus() }
+                onDoubleClicked: root.openSaved(index)
+              }
+            }
+            Text {
+              anchors.centerIn: parent
+              visible: root.libraryNames.length === 0
+              text: "No saved loops yet. Type a name and press Enter."
+              color: root.foreground
+              opacity: 0.45
+              font.pixelSize: 11
+              font.family: Style.fontFamily
+            }
+          }
+        }
       }
 
       Column {
@@ -356,7 +552,7 @@ Item {
           Row {
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            spacing: 10
+            spacing: 8
             Text {
               anchors.verticalCenter: parent.verticalCenter
               text: "omaloop"
@@ -367,7 +563,7 @@ Item {
             }
             Text {
               anchors.verticalCenter: parent.verticalCenter
-              text: root.themeName !== "" ? "sounds like " + root.themeName : ""
+              text: (root.themeName !== "" ? "sounds like " + root.themeName + " · " : "") + root.keyName
               color: root.foreground
               opacity: 0.55
               font.pixelSize: 11
@@ -401,7 +597,7 @@ Item {
           Row {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            spacing: 14
+            spacing: 11
 
             // preset
             Text {
@@ -435,6 +631,26 @@ Item {
                 onClicked: root.setSwing(root.swing >= 0.6 ? 0 : root.swing + 0.1)
                 onWheel: function(w) { root.setSwing(root.swing + (w.angleDelta.y > 0 ? 0.05 : -0.05)) }
               }
+            }
+            // share
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "share"
+              color: root.foreground
+              opacity: 0.8
+              font.pixelSize: 12
+              font.family: Style.fontFamily
+              MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: root.copyLink() }
+            }
+            // library
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "library"
+              color: root.libraryOpen ? root.accent : root.foreground
+              opacity: 0.8
+              font.pixelSize: 12
+              font.family: Style.fontFamily
+              MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: root.libraryOpen ? root.closeLibrary() : root.openLibrary(false) }
             }
             // export
             Text {
@@ -567,7 +783,7 @@ Item {
                 : root.engineState === "building" ? "Building engine… " + root.lastErr
                 : root.engineState === "error" ? (root.statusText || "Engine error: " + root.lastErr)
                 : root.statusText !== "" ? root.statusText
-                : "Space play · arrows move · Enter toggle · Q-P A-H steps · [ ] note · , . bpm · ; ' swing · S-P preset · S-R random · S-C clear · S-E export · Esc hide"
+                : "Space play · arrows · Enter toggle · Q-P A-H steps · [ ] note · , . bpm · ; ' swing · S-P preset · S-R random · S-E export · C-C copy link · C-V paste · C-S save · C-O library · Esc"
           }
 
           Text {

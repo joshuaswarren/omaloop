@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>omaloop</title>
+<meta property="og:title" content="omaloop loop">
+<meta property="og:description" content="A 16-step loop made in omaloop, the drop-down groovebox for Omarchy. Press play.">
+<style>
+  :root { --bg:#0b0b0d; --fg:#c9c9d1; --acc:#ff7ad9; --dim:rgba(201,201,209,.08); --dim2:rgba(201,201,209,.05); }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 ui-monospace, "JetBrains Mono", Menlo, monospace; display:flex; justify-content:center; padding:28px 12px }
+  main { width:min(760px,100%) }
+  h1 { font-size:20px; margin:0; color:var(--acc); letter-spacing:.02em }
+  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:18px }
+  header .meta { opacity:.6; font-size:12px }
+  .bars { display:inline-flex; gap:3px; align-items:flex-end; height:14px; margin-left:4px }
+  .bars i { width:4px; background:var(--acc); border-radius:1px; display:block }
+  .grid { display:grid; grid-template-columns:58px repeat(16, 1fr); gap:4px; margin:10px 0 }
+  .lab { font-size:11px; opacity:.6; align-self:center; padding-left:6px }
+  .cell { height:28px; border-radius:4px; background:var(--dim2); display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; color:var(--bg) }
+  .cell.g { background:var(--dim) }
+  .cell.on { background:var(--acc) }
+  .cell.ph { outline:2px solid rgba(201,201,209,.5) }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:14px 0 }
+  button, a.btn { background:var(--acc); color:var(--bg); border:0; border-radius:6px; padding:8px 14px; font:inherit; font-weight:700; cursor:pointer; text-decoration:none }
+  button.ghost, a.ghost { background:transparent; color:var(--fg); border:1px solid rgba(201,201,209,.25) }
+  code { background:var(--dim); padding:2px 6px; border-radius:4px; font-size:12px }
+  pre { background:var(--dim); padding:10px 12px; border-radius:6px; overflow:auto; font-size:12px }
+  p.small { opacity:.6; font-size:12px }
+  #err { color:#ff6b6b }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>omaloop</h1>
+    <span class="meta" id="meta"></span>
+    <span class="bars" id="bars"></span>
+  </header>
+
+  <div id="err"></div>
+  <div class="grid" id="grid"></div>
+
+  <div class="row">
+    <button id="play">play</button>
+    <a class="btn" id="open" href="#">open in omaloop</a>
+    <button class="ghost" id="copy">copy link</button>
+    <span class="meta" id="status"></span>
+  </div>
+
+  <p class="small">This page renders the loop in your browser with the same synthesis as the desktop engine, using the tone the sender's theme gave it. On Omarchy, "open in omaloop" loads it into your own panel, where your theme picks the sound and key.</p>
+
+  <p>Don't have it yet? omaloop is a drop-down groovebox for Omarchy 4.</p>
+<pre>omarchy plugin add https://github.com/joshuaswarren/omaloop --enable
+~/.config/omarchy/plugins/io.github.joshuaswarren.omaloop/install.sh --bind</pre>
+  <p class="small"><a class="ghost" style="padding:4px 8px" href="https://github.com/joshuaswarren/omaloop">source on GitHub</a></p>
+</main>
+
+<script>
+// Loop code v1: 48 bytes base64url. [0]=1, [1..9) 4 drum masks u16 LE, [9..41) 32 notes,
+// [41]=bpm-40, [42]=swing, [43..47) cutoff detune drive sub (x255), [47]=transpose.
+const STEPS = 16, SR = 48000;
+const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+function decode(code) {
+  let acc = 0, bits = 0; const out = [];
+  for (const c of code.replace(/=/g, "")) {
+    const v = B64.indexOf(c); if (v < 0) throw new Error("bad character in loop code");
+    acc = (acc << 6) | v; bits += 6;
+    if (bits >= 8) { bits -= 8; out.push((acc >> bits) & 255); }
+  }
+  if (out.length < 48 || out[0] !== 1) throw new Error("not an omaloop v1 loop code");
+  const b = out, drums = [], notes = [];
+  for (let t = 0; t < 4; t++) { const m = b[1 + t * 2] | (b[2 + t * 2] << 8); drums.push([...Array(16)].map((_, i) => !!(m & (1 << i)))); }
+  for (let t = 0; t < 2; t++) notes.push(b.slice(9 + t * 16, 25 + t * 16).map(n => Math.min(n, 127)));
+  const f = x => x / 255;
+  return { drums, notes, bpm: 40 + b[41], swing: f(b[42]), cutoff: f(b[43]), detune: f(b[44]), drive: f(b[45]), sub: f(b[46]), transpose: b[47] % 12 };
+}
+
+// Straight port of engine/src/main.rs next_sample().
+function render(p, bars) {
+  const stepLen = SR * 60 / p.bpm / 4;
+  const total = Math.floor(stepLen * STEPS * bars);
+  const out = new Float32Array(total);
+  const OFF = { age: 1e9, active: false };
+  let kick = OFF, snare = OFF, hat = OFF, ohat = OFF, bass = OFF, lead = OFF;
+  let bassFreq = 0, bassPhase = 0, bassLp = 0, leadFreq = 0, leadPhase = [0, 0, 0], leadLp = 0;
+  const DMAX = 96000, delay = new Float32Array(DMAX); let dpos = 0;
+  let noise = 0x12345678 >>> 0;
+  const white = () => { noise ^= noise << 13; noise >>>= 0; noise ^= noise >>> 17; noise ^= noise << 5; noise >>>= 0; return (noise / 4294967295) * 2 - 1; };
+  const hz = n => 440 * Math.pow(2, (n - 69) / 12);
+  let step = 0, left = 0;
+  const dt = 1 / SR, dlen = Math.min(Math.max(Math.floor(stepLen * 3), 1), DMAX - 1);
+  for (let s = 0; s < total; s++) {
+    if (left <= 0) {
+      const on = { age: 0, active: true };
+      if (p.drums[0][step]) kick = { ...on };
+      if (p.drums[1][step]) snare = { ...on };
+      if (p.drums[2][step]) { hat = { ...on }; ohat = OFF; }
+      if (p.drums[3][step]) ohat = { ...on };
+      const bn = p.notes[0][step]; if (bn > 0) { bass = { ...on }; bassFreq = hz(bn + p.transpose); }
+      const ln = p.notes[1][step]; if (ln > 0) { lead = { ...on }; leadFreq = hz(ln + p.transpose); }
+      const sw = p.swing * 0.5;
+      left = step % 2 === 0 ? stepLen * (1 + sw) : stepLen * (1 - sw);
+    }
+    left -= 1; if (left <= 0) step = (step + 1) % STEPS;
+    let dry = 0, send = 0;
+    if (kick.active) { const t = kick.age, f = 48 + 110 * Math.exp(-t * 38), tail = 6 + 6 * (1 - p.sub); dry += Math.sin(2 * Math.PI * f * t) * Math.exp(-t * tail) * 0.95; kick.age += dt; kick.active = t < 0.7; }
+    if (snare.active) { const t = snare.age, n = white(); dry += (n * 0.55 + Math.sin(2 * Math.PI * 185 * t) * 0.3) * Math.exp(-t * 17) * 0.6; snare.age += dt; snare.active = t < 0.3; }
+    if (hat.active) { const t = hat.age; dry += white() * Math.exp(-t * 85) * 0.22; hat.age += dt; hat.active = t < 0.12; }
+    if (ohat.active) { const t = ohat.age; dry += white() * Math.exp(-t * 9) * 0.16; ohat.age += dt; ohat.active = t < 0.5; }
+    if (bass.active) { const t = bass.age; bassPhase = (bassPhase + bassFreq * dt) % 1; const saw = bassPhase * 2 - 1, sub = Math.sin(2 * Math.PI * bassPhase), env = Math.exp(-t * 9); const a = Math.min(0.03 + (0.15 + p.cutoff * 0.5) * env, 0.99); bassLp += a * (saw - bassLp); dry += (bassLp * 0.6 + sub * 0.5 * p.sub) * env * 0.7; bass.age += dt; bass.active = t < 0.4; }
+    if (lead.active) { const t = lead.age, spread = p.detune * 0.014; let sum = 0; for (let i = 0; i < 3; i++) { leadPhase[i] = (leadPhase[i] + leadFreq * (1 + (i - 1) * spread) * dt) % 1; sum += leadPhase[i] * 2 - 1; } const env = Math.exp(-t * 5.5); const a = Math.min(0.02 + p.cutoff * 0.6 * env, 0.99); leadLp += a * (sum / 3 - leadLp); const v = leadLp * env * 0.45; dry += v; send += v; lead.age += dt; lead.active = t < 0.7; }
+    const rd = (dpos + DMAX - dlen) % DMAX, echo = delay[rd];
+    delay[dpos] = send + echo * 0.45; dpos = (dpos + 1) % DMAX;
+    const mix = dry + echo * 0.35, k = 1 + p.drive * 3;
+    out[s] = (Math.tanh(mix * k) / Math.tanh(k)) * 0.8 * 0.8;
+  }
+  return out;
+}
+
+const KEYS = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+const NAMES = ["KICK","SNARE","HAT","OHAT","BASS","LEAD"];
+const noteName = n => KEYS[n % 12] + (Math.floor(n / 12) - 1);
+const $ = id => document.getElementById(id);
+
+let p, buf, ctx, src, startAt = 0, cells = [];
+function draw() {
+  const g = $("grid"); g.innerHTML = ""; cells = [];
+  for (let r = 0; r < 6; r++) {
+    const lab = document.createElement("div"); lab.className = "lab"; lab.textContent = NAMES[r]; g.appendChild(lab);
+    cells.push([]);
+    for (let c = 0; c < 16; c++) {
+      const d = document.createElement("div");
+      const on = r < 4 ? p.drums[r][c] : p.notes[r - 4][c] > 0;
+      d.className = "cell" + (Math.floor(c / 4) % 2 === 0 ? " g" : "") + (on ? " on" : "");
+      if (r >= 4 && on) d.textContent = noteName(p.notes[r - 4][c]);
+      g.appendChild(d); cells[r].push(d);
+    }
+  }
+  $("meta").textContent = `${p.bpm} bpm · swing ${Math.round(p.swing * 100)}% · ${KEYS[(9 + p.transpose) % 12]} minor`;
+  $("bars").innerHTML = ["cutoff","detune","drive","sub"].map(k => `<i title="${k}" style="height:${Math.max(2, Math.round(p[k] * 14))}px"></i>`).join("");
+}
+function playhead() {
+  if (!src) return;
+  const stepLen = 60 / p.bpm / 4, loopLen = stepLen * STEPS * 2;
+  const t = ((ctx.currentTime - startAt) % loopLen) % (stepLen * STEPS);
+  // swing shifts odd-step boundaries; close enough for a cursor
+  const i = Math.floor(t / stepLen) % STEPS;
+  cells.forEach(row => row.forEach((d, c) => d.classList.toggle("ph", c === i)));
+  requestAnimationFrame(playhead);
+}
+function stop() { if (src) { src.stop(); src = null; } cells.forEach(row => row.forEach(d => d.classList.remove("ph"))); $("play").textContent = "play"; }
+$("play").onclick = () => {
+  if (src) return stop();
+  ctx = ctx || new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SR });
+  if (!buf) { const pcm = render(p, 2); buf = ctx.createBuffer(1, pcm.length, SR); buf.copyToChannel(pcm, 0); }
+  src = ctx.createBufferSource(); src.buffer = buf; src.loop = true; src.connect(ctx.destination);
+  startAt = ctx.currentTime; src.start(); $("play").textContent = "stop"; playhead();
+};
+$("copy").onclick = async () => { await navigator.clipboard.writeText(location.href); $("status").textContent = "link copied"; };
+
+const code = (location.hash || "").replace(/^#/, "").trim();
+try {
+  if (!code) throw new Error("No loop in this link. Make one in omaloop and press Ctrl+C to get a link.");
+  p = decode(code);
+  $("open").href = "omaloop://" + code;
+  draw();
+} catch (e) {
+  $("err").textContent = e.message;
+  $("play").disabled = true; $("open").style.display = "none"; $("copy").style.display = "none";
+}
+</script>
+</body>
+</html>

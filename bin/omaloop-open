@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# omaloop:// URL handler. Accepts omaloop://<code>, https://.../#<code>, or a bare code,
+# and drops the panel down with that loop loaded and playing.
+set -euo pipefail
+arg="${1:-}"
+code="$(printf '%s' "$arg" | grep -oE '[A-Za-z0-9_-]{64}' | head -1 || true)"
+if [[ -z "$code" ]]; then
+  notify-send "omaloop" "No loop code in: $arg" 2>/dev/null || true
+  exit 1
+fi
+exec omarchy-shell shell summon io.github.joshuaswarren.omaloop "{\"code\":\"$code\",\"play\":true}"

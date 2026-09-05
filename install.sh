@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build the omaloop engine and, with --bind, add SUPER+L to ~/.config/hypr/bindings.lua.
-# Safe to re-run. Requires cargo (rustup.rs or `omarchy pkg add rustup`).
+# Build the omaloop engine, register the omaloop:// link handler, and with --bind
+# add SUPER+ALT+L to ~/.config/hypr/bindings.lua. Safe to re-run.
+# Requires cargo (rustup.rs or `omarchy pkg add rustup`).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,19 +16,37 @@ echo "==> building engine"
 cargo build --release --manifest-path "$here/engine/Cargo.toml"
 echo "    $here/engine/target/release/omaloop-engine"
 
+echo "==> registering omaloop:// links"
+apps="$HOME/.local/share/applications"
+mkdir -p "$apps"
+chmod +x "$here/bin/omaloop-open"
+cat > "$apps/omaloop.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=omaloop
+Comment=Open a shared omaloop loop
+Exec=$here/bin/omaloop-open %u
+NoDisplay=true
+Terminal=false
+MimeType=x-scheme-handler/omaloop;
+EOF
+update-desktop-database "$apps" 2>/dev/null || true
+xdg-mime default omaloop.desktop x-scheme-handler/omaloop
+echo "    $(xdg-mime query default x-scheme-handler/omaloop)"
+
 if [[ "${1:-}" == "--bind" ]]; then
   bindings="$HOME/.config/hypr/bindings.lua"
   if [[ -f "$bindings" ]] && grep -q "$plugin_id" "$bindings"; then
-    echo "==> SUPER+L already bound in $bindings"
+    echo "==> shortcut already bound in $bindings"
   else
     mkdir -p "$(dirname "$bindings")"
-    printf '\n-- omaloop: drop-down groovebox\no.bind("SUPER + L", "omaloop", "omarchy-shell shell toggle %s")\n' "$plugin_id" >> "$bindings"
-    echo "==> added SUPER+L to $bindings (reload Hyprland: hyprctl reload)"
+    printf '\n-- omaloop: drop-down groovebox\no.bind("SUPER + ALT + L", "omaloop", "omarchy-shell shell toggle %s")\n' "$plugin_id" >> "$bindings"
+    echo "==> added SUPER+ALT+L to $bindings (reload Hyprland: hyprctl reload)"
   fi
 else
   echo
-  echo "To bind SUPER+L, re-run with --bind, or add to ~/.config/hypr/bindings.lua:"
-  echo "  o.bind(\"SUPER + L\", \"omaloop\", \"omarchy-shell shell toggle $plugin_id\")"
+  echo "To bind SUPER+ALT+L, re-run with --bind, or add to ~/.config/hypr/bindings.lua:"
+  echo "  o.bind(\"SUPER + ALT + L\", \"omaloop\", \"omarchy-shell shell toggle $plugin_id\")"
 fi
 
 echo
