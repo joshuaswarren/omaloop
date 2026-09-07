@@ -279,7 +279,7 @@ Item {
     else send({ cmd: "note", track: r.id, index: col, note: cellOn(rowIdx, col) ? 0 : r.root + 12 })
     send({ cmd: "dump" })
   }
-  function transpose(rowIdx, col, dir) {
+  function transposeNote(rowIdx, col, dir) {
     var r = root.rows[rowIdx]
     if (r.kind !== "note") return
     var n = noteAt(rowIdx, col)
@@ -386,8 +386,8 @@ Item {
     if (k === Qt.Key_Up) { moveCursor(-1, 0); return }
     if (k === Qt.Key_Down) { moveCursor(1, 0); return }
     if (k === Qt.Key_Return || k === Qt.Key_Enter || k === Qt.Key_X) { toggleCell(root.cursorRow, root.cursorCol); return }
-    if (k === Qt.Key_BracketLeft) { transpose(root.cursorRow, root.cursorCol, -1); return }
-    if (k === Qt.Key_BracketRight) { transpose(root.cursorRow, root.cursorCol, 1); return }
+    if (k === Qt.Key_BracketLeft) { transposeNote(root.cursorRow, root.cursorCol, -1); return }
+    if (k === Qt.Key_BracketRight) { transposeNote(root.cursorRow, root.cursorCol, 1); return }
     if (k === Qt.Key_Comma || k === Qt.Key_Less) { setBpm(root.bpm - (shift ? 5 : 1)); return }
     if (k === Qt.Key_Period || k === Qt.Key_Greater) { setBpm(root.bpm + (shift ? 5 : 1)); return }
     if (k === Qt.Key_Semicolon) { setSwing(root.swing - 0.05); return }
@@ -782,7 +782,7 @@ Item {
                     onClicked: { root.cursorRow = rowItem.index; root.cursorCol = cell.index; root.toggleCell(rowItem.index, cell.index) }
                     onWheel: function(w) {
                       root.cursorRow = rowItem.index; root.cursorCol = cell.index
-                      root.transpose(rowItem.index, cell.index, w.angleDelta.y > 0 ? 1 : -1)
+                      root.transposeNote(rowItem.index, cell.index, w.angleDelta.y > 0 ? 1 : -1)
                     }
                   }
                 }
