@@ -1,5 +1,7 @@
 # omaloop
 
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink)](https://github.com/sponsors/joshuaswarren)
+
 **Your Omarchy theme is a loop.** Press SUPER+ALT+L and a groovebox drops down from the top of the screen in your theme's colors, already playing a loop the theme composed. Switch theme and it composes a new one. Press Ctrl+C and the loop is a link you can tweet.
 
 ![Futurism composes synthwave in G minor](docs/futurism.png)
@@ -165,6 +167,14 @@ bin/omaloop-open   the omaloop:// handler
 engine/            the Rust groovebox
 docs/index.html    the share page (GitHub Pages), a JS port of the engine
 ```
+
+## Support
+
+Every bit of support helps keep omaloop alive and free. If you are able, [sponsor on GitHub](https://github.com/sponsors/joshuaswarren) or send a Lightning donation to `joshuaswarren@strike.me` to directly fund continued development and new integrations.
+
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?style=for-the-badge)](https://github.com/sponsors/joshuaswarren)
+
+If financial support is not an option, you can still make a big difference: [star the repo](https://github.com/joshuaswarren/omaloop), share it, or recommend it to a colleague. Word of mouth is how most people find omaloop.
 
 ## License
 
