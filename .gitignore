@@ -1,3 +1,5 @@
 engine/target/
 *.wav
 .shot-*.png
+__pycache__/
+*.pyc
