@@ -7,7 +7,21 @@
 ![Futurism composes synthwave in G minor](docs/futurism.png)
 ![Tokyo Night composes techno in E minor](docs/tokyoled.png)
 
-Same plugin, two themes, two loops. No samples, no DAW, no config, no network. A small Rust engine synthesizes four drums, a bass, and a lead and sends them straight to PipeWire.
+Same plugin, two themes, two loops. No samples, no DAW, no account, and no automatic network activity. A small Rust engine synthesizes four drums, a bass, and a lead and sends them straight to PipeWire.
+
+## Export a finished video
+
+Open **share → Export video** to render the current loop with its sound and Omarchy theme colors. **Copy loop link** in the same menu copies a link independently of video export.
+
+- Choose portrait (1080 × 1920), square (1080 × 1080), or landscape (1920 × 1080).
+- Set 1–64 repeats (default 4), add an optional social handle, and choose an output folder (default `~/Videos/omaloop`).
+- Click the preview to see the whole frame at a larger size. Close the expanded view to return to the same export settings.
+
+**Render video** saves a 30 fps MP4 with H.264 video and AAC audio. The render uses the loop and settings captured when it starts. The video shows the six tracks, moving playhead, credits, and your handle if supplied. You can cancel while rendering.
+
+FFmpeg is optional. If the renderer needs FFmpeg with software `libx264` and AAC support, the dialog offers to open Omarchy's package installer.
+
+After rendering, choose **Open video**, **Open folder**, or **Send via LocalSend**. The last action requires `localsend-cli` and opens its device picker for you to choose a recipient.
 
 ## Install
 
@@ -27,7 +41,7 @@ Requires Omarchy 4 (Quattro), Rust 1.75+, and `wl-clipboard` (already on Omarchy
 omarchy plugin remove io.github.joshuaswarren.omaloop
 ```
 
-The first line removes the link handler and the keybinding it added. The second removes the plugin. Your loops in `~/.config/omaloop` and exports in `~/Music/omaloop` are left for you to keep or delete.
+The first line removes the link handler and the keybinding it added. The second removes the plugin. Your loops in `~/.config/omaloop`, WAV exports in `~/Music/omaloop`, and videos in `~/Videos/omaloop` are left for you to keep or delete.
 
 ## What a theme becomes
 
@@ -71,7 +85,8 @@ Custom themes get a loop too. Switching theme saves the outgoing loop to your li
 | `Shift+P` | cycle the hand-made presets (y2k, acid, minimal, breaks) |
 | `Shift+R` | randomize the cursor's row (drums by density, notes in scale) |
 | `Shift+C` or `Delete` | clear the cursor's row |
-| `Shift+E` | export 4 bars to `~/Music/omaloop/<name>-<time>.wav` |
+| `Shift+E` | export 4 bars to `~/Music/omaloop/<name>-<time>.wav` (legacy behavior) |
+| click `share` | choose **Copy loop link** or **Export video** |
 | `Ctrl+C` | copy a share link for this loop |
 | `Ctrl+V` | load a loop from a link or code on the clipboard |
 | `Ctrl+S` | save to your library (type a name, Enter) |
@@ -90,13 +105,16 @@ https://joshuaswarren.github.io/omaloop/#AUEEEJBVVQCAIQAAIQAAIQAAACEAACQAAAAAAAA
 
 The 64 characters after `#` are the whole loop: 4 drum masks, 32 notes, tempo, swing, tone, and key, in 48 bytes. Anyone who opens the link gets a static page that plays the loop in the browser and shows the grid. The page is a JavaScript port of the engine. If they have omaloop, the "open in omaloop" button hands the code to their panel through the `omaloop://` scheme. Their theme decides how it sounds. Ctrl+V loads a link or bare code from the clipboard.
 
+The v1 share code is intentionally compact, not a complete export snapshot: drum masks and MIDI notes are exact; BPM is rounded and stored as an integer from 40–295; swing, cutoff, detune, drive, and sub are quantized to one byte; volume, preset name, palette/theme, title, and creator handle are absent. A video job carries a pattern snapshot, palette, font, aspect, quality, repeat count, handle, job ID, and output path.
+
 ## Where things live
 
 | Path | What |
 |---|---|
 | `~/.config/omaloop/pattern.json` | the current loop, written on every change |
 | `~/.config/omaloop/patterns/<name>.json` | your library |
-| `~/Music/omaloop/*.wav` | exports |
+| `~/Music/omaloop/*.wav` | legacy WAV exports |
+| `~/Videos/omaloop/*.mp4` | finished-loop video exports |
 | `~/.local/share/applications/omaloop.desktop` | the `omaloop://` handler, written by `install.sh` |
 | `~/.config/hypr/bindings.lua` | one appended `o.bind` line, only with `install.sh --bind` |
 
@@ -104,24 +122,24 @@ The 64 characters after `#` are the whole loop: 4 drum masks, 32 notes, tempo, s
 
 Written for anyone reviewing this plugin before enabling it.
 
-- The panel (`OmaloopPanel.qml`) spawns one child process, `engine/target/release/omaloop-engine`. It is built from the Rust source in this repo with `cargo build --locked`. Dependencies are pinned in `engine/Cargo.lock`: cpal (audio), hound (WAV), serde_json, parking_lot. The engine reads stdin. It writes stdout, the state file, library files, and the WAV exports you ask for.
-- The panel also runs `test`, `cargo build --release` (Build button only), `wl-copy` (Ctrl+C), and `wl-paste -n` (Ctrl+V). It reads `~/.local/state/omarchy/current/theme.name` to show the theme name.
+- The panel (`OmaloopPanel.qml`) spawns the realtime child process `engine/target/release/omaloop-engine` and, only for a requested video, one separate export instance. It is built from the Rust source in this repo with `cargo build --locked`. Dependencies are pinned in `engine/Cargo.lock`: cpal (audio), hound (WAV), serde_json, parking_lot, libc for owned-child cleanup, and fontdue for video text. The engines read stdin and write structured stdout, the state/library files, and requested artifacts.
+- The panel also runs `test`, `cargo build --release --locked` (Build button only), `wl-copy` (sharing), and `wl-paste -n` (Ctrl+V). For a video preview or export it resolves the Omarchy font with `fc-match` (falling back to built-in bitmap text if unavailable), probes `ffmpeg`, may launch the visible `omarchy-pkg-add ffmpeg` terminal only after confirmation, runs a separate renderer, removes superseded preview files, and uses `xdg-open` and the optional `localsend-cli` handoff. It reads `~/.local/state/omarchy/current/theme.name` to show the theme name.
 - `bin/omaloop-open` is the `omaloop://` handler. It extracts a 64-character `[A-Za-z0-9_-]` code from the URL and calls `omarchy-shell shell summon` with it. It ignores anything else.
 - `install.sh` runs only when you run it. No sudo or pkexec is required. It never downloads a script and only writes the files listed above. `--uninstall` reverses it.
-- No network access anywhere in the plugin. The share page is static HTML on GitHub Pages and does not phone home.
+- The plugin makes no automatic network requests, telemetry, cloud upload, account connection, or social post. The share page is static HTML on GitHub Pages and does not phone home. If you explicitly choose Send via LocalSend, the supported LocalSend CLI performs the user-approved transfer on the local network; Omaloop does not discover peers, alter firewalls, or report receipt.
 - `omarchy plugin validate` passes; there are no symlinks and no bundled binaries in the repo.
 
 ## Architecture
 
 ```
-OmaloopPanel.qml   Quickshell panel, theme colors from qs.Commons, all keys
-      |  Quickshell.Io.Process: JSON lines over stdin / stdout
+OmaloopPanel.qml   Quickshell panel, theme colors from qs.Commons, all keys,
+      |                 frozen video dialog and job lifecycle
       v
-omaloop-engine     Rust, one file: 16-step clock with swing, 6 voices,
-      |            dotted-eighth delay, soft clip, composer, loop codes,
-      |            state file, library, WAV export
+omaloop-engine      Rust realtime engine plus deterministic software renderer:
+      |                 16-step clock with swing, 6 voices, dotted-eighth delay,
+      |                 loop codes, state/library/WAV compatibility, RGB frames
       v
-PipeWire           via cpal
+PipeWire / FFmpeg   cpal playback; optional local H.264/AAC muxing
 ```
 
 The engine is usable on its own:

@@ -28,7 +28,10 @@
 //!
 //! `--state <file>` loads the pattern at start and saves it after every change.
 //! Saved patterns live next to it in `patterns/<name>.json`.
-//! `--render out.wav --bars N [--preset acid | --code <loop code>]` renders offline.
+//! `--render out.wav --bars N [--preset acid | --code <loop code>]` renders the
+//! legacy WAV offline. `--render-video` reads one frozen export job JSON line
+//! and streams deterministic RGB frames plus audio through the installed
+//! software FFmpeg encoders. `--render-preview` writes one matching PPM still.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
@@ -37,6 +40,8 @@ use std::f32::consts::PI;
 use std::io::{BufRead, Write};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
+
+mod video;
 
 const STEPS: usize = 16;
 const DRUMS: [&str; 4] = ["kick", "snare", "hat", "ohat"];
@@ -48,7 +53,7 @@ const MAJOR: [u8; 7] = [0, 2, 4, 5, 7, 9, 11];
 const DORIAN: [u8; 7] = [0, 2, 3, 5, 7, 9, 10];
 const DELAY_MAX: usize = 96_000;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Pattern {
     drums: [[bool; STEPS]; 4],
     notes: [[u8; STEPS]; 2],
@@ -875,6 +880,12 @@ fn save_state(path: &str, pattern: &Pattern) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--render-video") {
+        std::process::exit(video::run_video_mode());
+    }
+    if args.iter().any(|a| a == "--render-preview") {
+        std::process::exit(video::run_preview_mode());
+    }
     if let Some(path) = arg_after(&args, "--render") {
         let bars = arg_after(&args, "--bars").and_then(|b| b.parse().ok()).unwrap_or(2);
         let pattern = arg_after(&args, "--code")
