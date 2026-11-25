@@ -11,7 +11,7 @@ Same plugin, two themes, two loops. No samples, no DAW, no account, and no autom
 
 ## Export a finished video
 
-Open **share → Export video** to render the current loop with its sound and Omarchy theme colors. **Copy loop link** in the same menu copies a link independently of video export.
+Press `Shift+V` or open **share → Export video** to set up a video of the current loop with its sound and Omarchy theme colors. **Copy loop link** in the same menu copies a link independently of video export.
 
 - Choose portrait (1080 × 1920), square (1080 × 1080), or landscape (1920 × 1080).
 - Set 1–64 repeats (default 4), add an optional social handle, and choose an output folder (default `~/Videos/omaloop`).
@@ -86,6 +86,8 @@ Custom themes get a loop too. Switching theme saves the outgoing loop to your li
 | `Shift+R` | randomize the cursor's row (drums by density, notes in scale) |
 | `Shift+C` or `Delete` | clear the cursor's row |
 | `Shift+E` | export 4 bars to `~/Music/omaloop/<name>-<time>.wav` (legacy behavior) |
+| `Shift+V` | open the video export dialog |
+| `F1` | show or hide the keyboard shortcuts |
 | click `share` | choose **Copy loop link** or **Export video** |
 | `Ctrl+C` | copy a share link for this loop |
 | `Ctrl+V` | load a loop from a link or code on the clipboard |
