@@ -101,6 +101,7 @@ Item {
   ]
   readonly property var presets: ["y2k", "acid", "minimal", "breaks"]
   readonly property var scale: [0, 2, 3, 5, 7, 8, 10]
+  // Qt's A–Z key codes are uppercase character codes, so the guide can label these keys directly.
   readonly property var stepKeys: [Qt.Key_Q, Qt.Key_W, Qt.Key_E, Qt.Key_R, Qt.Key_T, Qt.Key_Y, Qt.Key_U, Qt.Key_I,
                                    Qt.Key_O, Qt.Key_P, Qt.Key_A, Qt.Key_S, Qt.Key_D, Qt.Key_F, Qt.Key_G, Qt.Key_H]
 
@@ -135,7 +136,7 @@ Item {
         { label: "Move selection", keys: ["←", "↑", "↓", "→"] },
         { label: "Select row", keys: ["1", "to", "6"] },
         { label: "Toggle selected step", keys: ["Enter", "or", "X"] },
-        { label: "Toggle steps 1–16 in selected row", keys: ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", " ", "A", "S", "D", "F", "G", "H"], multiline: true },
+        { label: "Toggle steps 1–16 in selected row", keys: root.stepKeys.map(key => String.fromCharCode(key)), multiline: true },
         { label: "Bass / lead note down or up", keys: ["[", "]"] },
         { label: "Randomize selected row", keys: ["Shift", "+", "R"] },
         { label: "Clear selected row", keys: ["Del", "or", "Backspace", "or", "Shift", "+", "C"] }
@@ -975,14 +976,14 @@ Item {
               anchors.topMargin: shortcutCommand.entry.multiline ? 3 : 0
               anchors.verticalCenter: shortcutCommand.entry.multiline ? undefined : parent.verticalCenter
               height: Math.max(20, implicitHeight)
-              spacing: 3
+              spacing: shortcutCommand.entry.multiline ? 2 : 3
 
               Repeater {
                 model: shortcutCommand.entry.keys || []
                 delegate: Item {
                   required property string modelData
-                  readonly property bool separator: modelData === "+" || modelData === "or" || modelData === "to" || modelData === " "
-                  width: separator ? (modelData === " " ? 8 : separatorText.implicitWidth + 2) : Math.max(20, keyText.implicitWidth + 8)
+                  readonly property bool separator: modelData === "+" || modelData === "or" || modelData === "to"
+                  width: separator ? separatorText.implicitWidth + 2 : Math.max(20, keyText.implicitWidth + 8)
                   height: 20
 
                   Rectangle {
@@ -1006,7 +1007,7 @@ Item {
                   Text {
                     id: separatorText
                     anchors.centerIn: parent
-                    visible: parent.separator && parent.modelData !== " "
+                    visible: parent.separator
                     text: parent.modelData
                     color: root.muted
                     font.pixelSize: 10
