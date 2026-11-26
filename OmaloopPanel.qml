@@ -47,6 +47,8 @@ Item {
   property var tone: ({ cutoff: 0.45, detune: 0.5, drive: 0.2, sub: 0.5 })
   property int transpose: 0
   readonly property string keyName: ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"][(9 + transpose) % 12] + "m"
+  property bool shortcutsOpen: false
+  readonly property string shortcutsKeyLabel: "F1"
   property bool shareMenuOpen: false
   property bool copyLinkPending: false
   property bool libraryOpen: false
@@ -99,8 +101,52 @@ Item {
   ]
   readonly property var presets: ["y2k", "acid", "minimal", "breaks"]
   readonly property var scale: [0, 2, 3, 5, 7, 8, 10]
+  // Qt's A–Z key codes are uppercase character codes, so the guide can label these keys directly.
   readonly property var stepKeys: [Qt.Key_Q, Qt.Key_W, Qt.Key_E, Qt.Key_R, Qt.Key_T, Qt.Key_Y, Qt.Key_U, Qt.Key_I,
                                    Qt.Key_O, Qt.Key_P, Qt.Key_A, Qt.Key_S, Qt.Key_D, Qt.Key_F, Qt.Key_G, Qt.Key_H]
+
+  ////////////////////////////////////////////////////////////////////////////
+  // Keyboard shortcut guide
+  //
+  // These entries mirror handleKey so the sheet explains existing actions
+  // without adding another key map or changing any bindings.
+  ////////////////////////////////////////////////////////////////////////////
+  readonly property var shortcutColumns: [
+    [
+      { title: "Playback & mix", commands: [
+        { label: "Play / pause", keys: ["Space"] },
+        { label: "Show or hide keyboard shortcuts", keys: [root.shortcutsKeyLabel] },
+        { label: "Hide panel · keeps playing", keys: ["Esc"] },
+        { label: "Tempo −1 / +1 BPM", keys: [",", "."] },
+        { label: "Tempo −5 / +5 BPM", keys: ["Shift", "+", ",", "or", "."] },
+        { label: "Swing −5 / +5 points", keys: [";", "'"] },
+        { label: "Volume −5 / +5 points", keys: ["−", "="] }
+      ]},
+      { title: "Save & share", commands: [
+        { label: "Save loop", keys: ["Ctrl", "+", "S"] },
+        { label: "Open library", keys: ["Ctrl", "+", "O"] },
+        { label: "Copy loop link", keys: ["Ctrl", "+", "C"] },
+        { label: "Load loop from clipboard", keys: ["Ctrl", "+", "V"] },
+        { label: "Export four bars as WAV", keys: ["Shift", "+", "E"] },
+        { label: "Open video export", keys: ["Shift", "+", "V"] }
+      ]}
+    ],
+    [
+      { title: "Edit steps", commands: [
+        { label: "Move selection", keys: ["←", "↑", "↓", "→"] },
+        { label: "Select row", keys: ["1", "to", "6"] },
+        { label: "Toggle selected step", keys: ["Enter", "or", "X"] },
+        { label: "Toggle steps 1–16 in selected row", keys: root.stepKeys.map(key => String.fromCharCode(key)), multiline: true },
+        { label: "Bass / lead note down or up", keys: ["[", "]"] },
+        { label: "Randomize selected row", keys: ["Shift", "+", "R"] },
+        { label: "Clear selected row", keys: ["Del", "or", "Backspace", "or", "Shift", "+", "C"] }
+      ]},
+      { title: "Shape the loop", commands: [
+        { label: "Next preset", keys: ["Shift", "+", "P"] },
+        { label: "New variation from theme", keys: ["Shift", "+", "G"] }
+      ]}
+    ]
+  ]
 
   // First-party lock service: never map over the lock screen. Audio keeps
   // running while locked; it is a loop, not a notification.
@@ -770,6 +816,14 @@ Item {
   function status(t) { root.statusText = t; statusClear.restart() }
   Timer { id: statusClear; interval: 4000; onTriggered: root.statusText = "" }
 
+  ////////////////////////////////////////////////////////////////////////////
+  // Keyboard shortcut disclosure
+  //
+  // F1 works from the sequencer and from the tab-focused header. Pointer
+  // activation keeps the library's keyboard focus while it is open.
+  ////////////////////////////////////////////////////////////////////////////
+  function toggleShortcuts() { root.shortcutsOpen = !root.shortcutsOpen }
+
   function handleKey(event) {
     var k = event.key, shift = (event.modifiers & Qt.ShiftModifier) !== 0, ctrl = (event.modifiers & Qt.ControlModifier) !== 0
     if (root.videoDialogOpen) {
@@ -781,6 +835,14 @@ Item {
     if (root.shareMenuOpen) {
       root.shareMenuOpen = false
       if (k === Qt.Key_Escape) return
+    }
+    if (k === Qt.Key_F1 && event.modifiers === Qt.NoModifier) {
+      if (!event.isAutoRepeat) root.toggleShortcuts()
+      return
+    }
+    if (k === Qt.Key_V && event.modifiers === Qt.ShiftModifier) {
+      if (!event.isAutoRepeat) root.requestVideoDialog()
+      return
     }
     if (ctrl) {
       if (k === Qt.Key_C) { copyLink(); return }
@@ -821,14 +883,21 @@ Item {
     event.accepted = false
   }
 
-  // ---- window ----
+  ////////////////////////////////////////////////////////////////////////////
+  // Panel window and visible surface
+  //
+  // Reserve room for the shortcuts when the panel maps. Opening the guide
+  // then changes only the visible rectangle and its input region. Resizing
+  // the Wayland window here can briefly hide the whole sequencer.
+  ////////////////////////////////////////////////////////////////////////////
   readonly property int cellW: 40
   readonly property int cellH: 26
   readonly property int gap: 4
   readonly property int labelW: 58
   readonly property int sheetW: videoDialogOpen ? 700 : (24 + labelW + 16 * (cellW + gap) + 8)
+  readonly property int collapsedHeight: panelContent.implicitHeight + 2 * panelContent.anchors.margins
   readonly property int sheetH: videoDialogOpen ? (videoPreviewExpanded ? 500 : Math.max(255, videoDialogContent.implicitHeight + 24))
-                                : (46 + rows.length * (cellH + gap) + 34 + 12)
+                                : collapsedHeight + (shortcutGuide.expandedHeight > 0 ? panelContent.spacing + shortcutGuide.expandedHeight : 0)
 
   PanelWindow {
     id: window
@@ -841,17 +910,20 @@ Item {
     WlrLayershell.layer: WlrLayer.Top
     WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore
+    mask: Region { item: sheet }
 
     Rectangle {
       id: sheet
+      property real slideProgress: root.opened ? 1 : 0
       width: parent.width
-      height: parent.height
-      y: root.opened ? 0 : -root.sheetH
+      height: root.videoDialogOpen ? parent.height
+              : Math.min(parent.height, root.collapsedHeight + (shortcutGuide.height > 0 ? panelContent.spacing + shortcutGuide.height : 0))
+      y: (slideProgress - 1) * height
       color: root.background
       border.color: root.tint(root.accent, 0.35)
       border.width: 1
       radius: Commons.Style.cornerRadius
-      Behavior on y { NumberAnimation { id: slide; duration: 220; easing.type: Easing.OutCubic } }
+      Behavior on slideProgress { NumberAnimation { id: slide; duration: Commons.Style.duration(220); easing.type: Easing.OutCubic } }
 
       Item {
         id: keys
@@ -859,6 +931,129 @@ Item {
         focus: true
         Keys.onPressed: function(event) { root.handleKey(event) }
         MouseArea { anchors.fill: parent; onPressed: function(m) { keys.forceActiveFocus(); m.accepted = false } }
+      }
+
+      ////////////////////////////////////////////////////////////////////////////
+      // Shortcut sheet command rows
+      //
+      // Shared QML delegates keep keycaps and command dividers consistent
+      // across the four groups while each label stays beside its real action.
+      ////////////////////////////////////////////////////////////////////////////
+      Component {
+        id: shortcutCommandComponent
+        Column {
+          id: shortcutCommand
+          property var entry: ({ label: "", keys: [], multiline: false })
+          width: parent.width
+          spacing: 4
+
+          Item {
+            id: commandLine
+            width: parent.width
+            height: shortcutCommand.entry.multiline
+              ? commandLabel.implicitHeight + 3 + keycaps.implicitHeight
+              : Math.max(22, commandLabel.implicitHeight, keycaps.implicitHeight)
+
+            Text {
+              id: commandLabel
+              anchors.left: parent.left
+              anchors.verticalCenter: shortcutCommand.entry.multiline ? undefined : parent.verticalCenter
+              anchors.top: shortcutCommand.entry.multiline ? parent.top : undefined
+              width: shortcutCommand.entry.multiline ? parent.width : parent.width * 0.52
+              text: shortcutCommand.entry.label
+              color: root.foreground
+              wrapMode: Text.WordWrap
+              font.pixelSize: 11
+              font.family: Commons.Style.fontFamily
+            }
+
+            Flow {
+              id: keycaps
+              anchors.left: shortcutCommand.entry.multiline ? parent.left : commandLabel.right
+              anchors.leftMargin: shortcutCommand.entry.multiline ? 0 : 8
+              anchors.right: parent.right
+              anchors.top: shortcutCommand.entry.multiline ? commandLabel.bottom : undefined
+              anchors.topMargin: shortcutCommand.entry.multiline ? 3 : 0
+              anchors.verticalCenter: shortcutCommand.entry.multiline ? undefined : parent.verticalCenter
+              height: Math.max(20, implicitHeight)
+              spacing: shortcutCommand.entry.multiline ? 2 : 3
+
+              Repeater {
+                model: shortcutCommand.entry.keys || []
+                delegate: Item {
+                  required property string modelData
+                  readonly property bool separator: modelData === "+" || modelData === "or" || modelData === "to"
+                  width: separator ? separatorText.implicitWidth + 2 : Math.max(20, keyText.implicitWidth + 8)
+                  height: 20
+
+                  Rectangle {
+                    anchors.fill: parent
+                    visible: !parent.separator
+                    radius: 4
+                    color: Qt.tint(root.background, root.tint(root.foreground, 0.075))
+                    border.color: root.tint(root.foreground, 0.2)
+                    border.width: 1
+                  }
+                  Text {
+                    id: keyText
+                    anchors.centerIn: parent
+                    visible: !parent.separator
+                    text: parent.modelData
+                    color: root.foreground
+                    font.pixelSize: 10
+                    font.bold: true
+                    font.family: Commons.Style.fontFamily
+                  }
+                  Text {
+                    id: separatorText
+                    anchors.centerIn: parent
+                    visible: parent.separator
+                    text: parent.modelData
+                    color: root.muted
+                    font.pixelSize: 10
+                    font.family: Commons.Style.fontFamily
+                  }
+                }
+              }
+            }
+
+          }
+
+          Rectangle {
+            width: parent.width
+            height: 1
+            color: root.tint(root.foreground, 0.09)
+          }
+        }
+      }
+
+      Component {
+        id: shortcutGroupComponent
+        Column {
+          id: shortcutGroup
+          property var group: ({ title: "", commands: [] })
+          width: parent.width
+          spacing: 5
+
+          Text {
+            width: parent.width
+            text: shortcutGroup.group.title
+            color: root.accent
+            font.pixelSize: 11
+            font.bold: true
+            font.family: Commons.Style.fontFamily
+          }
+
+          Repeater {
+            model: shortcutGroup.group.commands || []
+            delegate: Loader {
+              required property var modelData
+              width: parent.width
+              sourceComponent: shortcutCommandComponent
+              onLoaded: item.entry = modelData
+            }
+          }
+        }
       }
 
       // ---- library overlay (over the grid) ----
@@ -1397,9 +1592,10 @@ Item {
 
       Column {
         id: panelContent
-        anchors.fill: parent
+        anchors { top: parent.top; left: parent.left; right: parent.right }
         anchors.margins: 12
         spacing: 6
+        visible: !root.videoDialogOpen
 
         // ---- header ----
         Item {
@@ -1623,6 +1819,99 @@ Item {
           }
         }
 
+        ////////////////////////////////////////////////////////////////////////////
+        // Persistent shortcut strip
+        //
+        // Playback and editing keys sit above the three ways to vary a loop.
+        // The footer keeps engine messages and volume in a separate row.
+        ////////////////////////////////////////////////////////////////////////////
+        Item {
+          width: parent.width
+          height: quickShortcutRows.implicitHeight + 10
+
+          Rectangle {
+            anchors.fill: parent
+            radius: 4
+            color: Qt.tint(root.background, root.tint(root.foreground, 0.035))
+          }
+
+          Column {
+            id: quickShortcutRows
+            anchors.left: parent.left
+            anchors.leftMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 9
+
+            Repeater {
+              model: [
+                [
+                  { label: "Play / pause", keys: ["Space"] },
+                  { label: "Move", keys: ["←", "↑", "↓", "→"] },
+                  { label: "Toggle step", keys: ["Enter"] },
+                  { label: "Save", keys: ["Ctrl", "+", "S"] }
+                ],
+                [
+                  { label: "Randomize row", keys: ["Shift", "+", "R"] },
+                  { label: "Next preset", keys: ["Shift", "+", "P"] },
+                  { label: "New variation from theme", keys: ["Shift", "+", "G"] }
+                ]
+              ]
+
+              delegate: Row {
+                id: quickShortcutRow
+                required property var modelData
+                spacing: 14
+
+                Repeater {
+                  model: quickShortcutRow.modelData
+
+                  delegate: Row {
+                    id: quickShortcut
+                    required property var modelData
+                    spacing: 6
+
+                    Row {
+                      spacing: 3
+                      Repeater {
+                        model: quickShortcut.modelData.keys
+
+                        delegate: Rectangle {
+                          required property string modelData
+                          readonly property bool separator: modelData === "+"
+                          width: separator ? keyLabel.implicitWidth : Math.max(20, keyLabel.implicitWidth + 8)
+                          height: 20
+                          radius: 4
+                          color: separator ? "transparent" : Qt.tint(root.background, root.tint(root.foreground, 0.075))
+                          border.color: root.tint(root.foreground, 0.2)
+                          border.width: separator ? 0 : 1
+
+                          Text {
+                            id: keyLabel
+                            anchors.centerIn: parent
+                            text: parent.modelData
+                            color: parent.separator ? root.muted : root.foreground
+                            font.pixelSize: 10
+                            font.bold: !parent.separator
+                            font.family: Commons.Style.fontFamily
+                          }
+                        }
+                      }
+                    }
+
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: quickShortcut.modelData.label
+                      color: root.foreground
+                      font.pixelSize: 11
+                      font.family: Commons.Style.fontFamily
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
         // ---- footer ----
         Item {
           width: parent.width
@@ -1642,7 +1931,7 @@ Item {
                 : root.engineState === "building" ? "Building engine… " + root.lastErr
                 : root.engineState === "error" ? (root.statusText || "Engine error: " + root.lastErr)
                 : root.statusText !== "" ? root.statusText
-                : "Space play · arrows · Enter toggle · Q-P A-H steps · [ ] note · , . bpm · ; ' swing · S-P preset · S-R random · S-E export · S-G new loop from theme · C-C link · C-V paste · C-S save · C-O library · Esc"
+                : root.playing ? "Playing" : "Ready"
           }
 
           Text {
@@ -1674,6 +1963,158 @@ Item {
             MouseArea {
               anchors.fill: parent; anchors.margins: -4
               onWheel: function(w) { root.setVolume(root.volume + (w.angleDelta.y > 0 ? 0.05 : -0.05)) }
+            }
+          }
+        }
+
+        ////////////////////////////////////////////////////////////////////////////
+        // Keyboard shortcut disclosure and command sheet
+        //
+        // A full-width tinted header opens a grouped guide below the unchanged
+        // sequencer, quick strip, and engine-status footer.
+        ////////////////////////////////////////////////////////////////////////////
+        Item {
+          id: shortcutDisclosure
+          objectName: "shortcutDisclosure"
+          width: parent.width
+          height: 32
+          activeFocusOnTab: !root.libraryOpen
+          Accessible.role: Accessible.Button
+          Accessible.name: "Keyboard shortcuts"
+          Accessible.description: root.shortcutsOpen ? "Expanded. Press F1, Space or Enter to collapse." : "Collapsed. Press F1, Space or Enter to expand."
+          Accessible.onPressAction: root.toggleShortcuts()
+
+          Keys.onPressed: function(event) {
+            var activation = event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+            if (activation && event.modifiers === Qt.NoModifier) {
+              if (!event.isAutoRepeat) root.toggleShortcuts()
+              event.accepted = true
+              return
+            }
+            root.handleKey(event)
+          }
+
+          Rectangle {
+            anchors.fill: parent
+            radius: 4
+            color: Qt.tint(root.background, root.tint(root.accent, 0.12))
+            border.color: shortcutDisclosure.activeFocus ? root.accent : "transparent"
+            border.width: shortcutDisclosure.activeFocus ? 2 : 0
+          }
+
+          Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 9
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Keyboard shortcuts"
+            color: root.foreground
+            font.pixelSize: 11
+            font.bold: true
+            font.family: Commons.Style.fontFamily
+          }
+
+          Rectangle {
+            anchors.right: shortcutChevron.left
+            anchors.rightMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            width: 23
+            height: 20
+            radius: 4
+            color: Qt.tint(root.background, root.tint(root.foreground, 0.075))
+            border.color: root.tint(root.foreground, 0.2)
+            border.width: 1
+
+            Text {
+              anchors.centerIn: parent
+              text: root.shortcutsKeyLabel
+              color: root.foreground
+              font.pixelSize: 10
+              font.bold: true
+              font.family: Commons.Style.fontFamily
+            }
+          }
+
+          Text {
+            id: shortcutChevron
+            anchors.right: parent.right
+            anchors.rightMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            text: "⌄"
+            rotation: root.shortcutsOpen ? 180 : 0
+            color: root.accent
+            font.pixelSize: 19
+            font.family: Commons.Style.fontFamily
+            Behavior on rotation { NumberAnimation { duration: Commons.Style.duration(120) } }
+          }
+
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onPressed: if (!root.libraryOpen) keys.forceActiveFocus()
+            onClicked: root.toggleShortcuts()
+          }
+        }
+      }
+
+      Flickable {
+        id: shortcutGuide
+        anchors.left: panelContent.left
+        anchors.top: panelContent.bottom
+        anchors.topMargin: panelContent.spacing
+        width: panelContent.width
+        visible: !root.videoDialogOpen
+        height: root.shortcutsOpen ? expandedHeight : 0
+        readonly property real expandedHeight: window.screen
+          ? Math.min(contentHeight, Math.max(0, window.screen.height - root.collapsedHeight - panelContent.spacing))
+          : contentHeight
+        contentWidth: width
+        contentHeight: guideContent.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        Controls.ScrollBar.vertical: Controls.ScrollBar { }
+        Behavior on height {
+          enabled: root.opened && !root.videoDialogOpen
+          NumberAnimation { duration: Commons.Style.duration(160); easing.type: Easing.OutCubic }
+        }
+
+        Column {
+          id: guideContent
+          width: shortcutGuide.width
+
+          Rectangle {
+            width: parent.width
+            height: 1
+            color: root.tint(root.foreground, 0.12)
+          }
+
+          Item {
+            width: parent.width
+            height: shortcutColumnsRow.implicitHeight + 24
+
+            Row {
+              id: shortcutColumnsRow
+              anchors.fill: parent
+              anchors.margins: 12
+              spacing: 18
+
+              Repeater {
+                model: root.shortcutColumns
+                delegate: Column {
+                  required property var modelData
+                  width: (shortcutColumnsRow.width - shortcutColumnsRow.spacing) / 2
+                  spacing: 14
+
+                  Repeater {
+                    model: modelData
+                    delegate: Loader {
+                      required property var modelData
+                      width: parent.width
+                      sourceComponent: shortcutGroupComponent
+                      onLoaded: item.group = modelData
+                    }
+                  }
+                }
+              }
             }
           }
         }
